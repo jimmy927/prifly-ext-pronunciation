@@ -54,10 +54,18 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
   };
 }
 
-/** The user's home as prifly's host reads it: `HOME` on POSIX, the profile folder on Windows. */
-function userHome(): string {
-  const env = process.env["HOME"];
-  return process.platform !== "win32" && env !== undefined && env !== "" ? env : homedir();
+/**
+ * The user's home as prifly's host reads it (`platform/data-dir.ts` there):
+ * `HOME` on POSIX, the profile folder on Windows, where `HOME` is usually
+ * unset and a Git Bash or MSYS shell sets it to a path of its own.
+ */
+export function userHome(
+  platform: NodeJS.Platform = process.platform,
+  env: Record<string, string | undefined> = process.env,
+  home: () => string = homedir,
+): string {
+  const set = env["HOME"];
+  return platform !== "win32" && set !== undefined && set !== "" ? set : home();
 }
 
 /** The real deps: the files under prifly's data folder, the worker a process of its own. */

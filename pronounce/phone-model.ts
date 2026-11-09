@@ -8,16 +8,11 @@
  */
 
 import * as ort from "onnxruntime-node";
+import { cpuSessionOptions } from "./engine";
 import type { PhoneModel } from "./serve";
 
 export async function openPhoneModel(path: string, threads: number): Promise<PhoneModel> {
-  const session = await ort.InferenceSession.create(path, {
-    executionProviders: ["cpu"],
-    intraOpNumThreads: threads,
-    interOpNumThreads: 1,
-    logSeverityLevel: 3,
-    extra: { session: { intra_op: { allow_spinning: "0" } } },
-  });
+  const session = await ort.InferenceSession.create(path, cpuSessionOptions(threads));
   const masked = session.inputNames.includes("attention_mask");
   return {
     logits: async (audio) => {

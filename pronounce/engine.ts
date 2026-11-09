@@ -8,6 +8,8 @@
  * onnxruntime.
  */
 
+import type { InferenceSession } from "onnxruntime-node";
+
 /** The worker's exit code after saying `unavailable`. */
 export const EXIT_UNAVAILABLE = 3;
 
@@ -34,4 +36,21 @@ export async function requireEngine(load?: () => Promise<unknown>): Promise<void
   // Written out in full before the exit, which would otherwise cut a piped stdout short.
   await Bun.write(Bun.stdout, `${JSON.stringify({ type: "unavailable", message: failed })}\n`);
   process.exit(EXIT_UNAVAILABLE);
+}
+
+/**
+ * The session options for the phoneme model: the CPU execution provider
+ * only. onnxruntime-node's Windows package ships DirectML (the GPU) beside
+ * the CPU library, and a session with no provider named may pick it; prifly's
+ * dictation models fill the GPU, and the model here is sized for 4 CPU
+ * threads. Only `phone-model.ts`, in the worker, reads this.
+ */
+export function cpuSessionOptions(threads: number): InferenceSession.SessionOptions {
+  return {
+    executionProviders: ["cpu"],
+    intraOpNumThreads: threads,
+    interOpNumThreads: 1,
+    logSeverityLevel: 3,
+    extra: { session: { intra_op: { allow_spinning: "0" } } },
+  };
 }

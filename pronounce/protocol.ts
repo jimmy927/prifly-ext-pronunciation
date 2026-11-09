@@ -47,7 +47,7 @@ export const PronounceLine = z.discriminatedUnion("type", [
 ]);
 export type PronounceLine = z.infer<typeof PronounceLine>;
 
-/** How the extension starts the worker: argv after the script, as JSON. */
+/** How the extension starts the worker: argv after the script, as base64 of JSON (`encodeArgs`). */
 export const PronounceArgs = z.strictObject({
   model: z.string(),
   vocab: z.string(),
@@ -56,3 +56,18 @@ export const PronounceArgs = z.strictObject({
   threads: z.number().int().positive(),
 });
 export type PronounceArgs = z.infer<typeof PronounceArgs>;
+
+/**
+ * `args` as the one argv word the worker takes: base64 of the JSON. Paths on
+ * Windows hold backslashes, spaces and sometimes quotes, and a command line is
+ * one string there that each program splits by its own rules, so the word is
+ * made of characters no rule treats specially.
+ */
+export function encodeArgs(args: PronounceArgs): string {
+  return Buffer.from(JSON.stringify(args), "utf8").toString("base64");
+}
+
+/** The arguments `encodeArgs` made; throws on a word that is not them. */
+export function decodeArgs(word: string): PronounceArgs {
+  return PronounceArgs.parse(JSON.parse(Buffer.from(word, "base64").toString("utf8")));
+}

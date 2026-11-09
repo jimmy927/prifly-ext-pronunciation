@@ -1,7 +1,7 @@
 /**
  * The body of the pronunciation worker (`worker.ts`): the phoneme model, its
- * vocabulary and the dictionary loaded once, at the lowest priority the
- * system gives, then requests answered one at a time in the order they come
+ * vocabulary and the dictionary loaded once, at a low priority (`workerPriority`),
+ * then requests answered one at a time in the order they come
  * until stdin ends. The model itself is handed in (`phone-model.ts`), so
  * tests run all of this over a fake one.
  */
@@ -56,16 +56,33 @@ export async function answerJudge(request: JudgeRequest, loaded: Loaded): Promis
 }
 
 /**
- * The lowest priority the system gives this process, so the reader's work,
- * dictation and its final words always go first; a system that refuses
- * (a container without the right) leaves it as it is, and says so.
+ * The priority the worker runs at: nice 19 (`PRIORITY_LOW`) where there is a
+ * nice value. On Windows `PRIORITY_LOW` is the idle class, which runs only
+ * when no other thread wants a core: the model would stall whenever the
+ * reader builds, plays or compiles, and a piece's marks would come minutes
+ * late. `PRIORITY_BELOW_NORMAL` still yields to the reader's own programs.
  */
-export function lowPriority(set: (priority: number) => void = (p) => setPriority(p)): void {
+export function workerPriority(platform: NodeJS.Platform = process.platform): number {
+  const { PRIORITY_LOW, PRIORITY_BELOW_NORMAL } = constants.priority;
+  return platform === "win32" ? PRIORITY_BELOW_NORMAL : PRIORITY_LOW;
+}
+
+/**
+ * Lowers this process's priority, so the reader's work, dictation and its
+ * final words always go first. A system that refuses (a container without
+ * the right, a Windows account without the access) leaves it as it is, and
+ * says so on stderr, which the extension logs; whatever the failure, the
+ * worker goes on.
+ */
+export function lowPriority(
+  set: (priority: number) => void = (p) => setPriority(p),
+  platform: NodeJS.Platform = process.platform,
+): void {
   try {
-    set(constants.priority.PRIORITY_LOW);
+    set(workerPriority(platform));
   } catch (caught) {
-    if (!(caught instanceof Error)) throw caught;
-    process.stderr.write(`pronounce: priority not lowered: ${caught.message}\n`);
+    const why = caught instanceof Error ? caught.message : String(caught);
+    process.stderr.write(`pronounce: priority not lowered: ${why}\n`);
   }
 }
 

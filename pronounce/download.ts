@@ -23,6 +23,10 @@ export type FileProgress = { file: string; done: number; total: number };
 export type DownloadDeps = {
   fetch?: (url: string, init: { signal: AbortSignal }) => Promise<Response>;
   signal?: AbortSignal;
+  /** Moves the finished `.part` into place; tests make it fail the way Windows does. */
+  rename?: (from: string, to: string) => Promise<void>;
+  /** Waits between tries to move it; tests make it instant. */
+  sleep?: (ms: number) => Promise<void>;
 };
 
 /** A downloaded file whose sha256 is not the pinned one: nothing was kept. */
@@ -34,6 +38,38 @@ export class ShaMismatch extends Error {
 const FILE_TIMEOUT_MS = 30 * 60_000;
 
 const MARKER = ".verified";
+
+/**
+ * What Windows answers a rename with while another process holds the file:
+ * Defender or a search indexer scanning the 318 MB file that was just
+ * closed, which lasts seconds. POSIX never says these for a rename.
+ */
+const BUSY = new Set(["EPERM", "EBUSY", "EACCES"]);
+
+/** The waits, in ms, between the tries to move a finished file into place. */
+export const RENAME_WAITS_MS = [100, 250, 500, 1000, 2000, 4000];
+
+/**
+ * `from` moved onto `to`, replacing a file already there (Node's rename does
+ * on every system, Windows included, when nothing holds it open). A file held
+ * by another process is tried again after each wait in `RENAME_WAITS_MS`; the
+ * last failure, and any other, is thrown.
+ */
+export async function moveInto(from: string, to: string, deps: DownloadDeps = {}): Promise<void> {
+  const move = deps.rename ?? rename;
+  const sleep = deps.sleep ?? ((ms: number) => Bun.sleep(ms));
+  for (let tries = 0; ; tries++) {
+    try {
+      await move(from, to);
+      return;
+    } catch (caught) {
+      const code = caught instanceof Error && "code" in caught ? String(caught.code) : "";
+      const wait = RENAME_WAITS_MS[tries];
+      if (!BUSY.has(code) || wait === undefined) throw caught;
+      await sleep(wait);
+    }
+  }
+}
 
 export function urlOf(spec: ModelFiles, path: string): string {
   if (spec.host === "github") {
@@ -82,7 +118,7 @@ async function download(
       `${url}: sha256 ${got.slice(0, 12)}... is not the pinned ${sha.slice(0, 12)}...`,
     );
   }
-  await rename(part, target);
+  await moveInto(part, target, deps);
 }
 
 /**
