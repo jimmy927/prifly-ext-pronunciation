@@ -6,8 +6,8 @@
   "description": "A prifly extension: hears English dictation and underlines words said with a German or Swedish accent feature.",
   "scripts": {
     "test": "bun test",
-    "typecheck": "tsc --noEmit",
-    "check": "biome check ."
+    "typecheck": "bun --bun tsc --noEmit",
+    "check": "bun --bun biome check ."
   },
   "dependencies": {
     "onnxruntime-node": "1.30.0",
