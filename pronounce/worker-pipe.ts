@@ -7,7 +7,7 @@
  */
 
 import { join } from "node:path";
-import type { PronounceArgs } from "./protocol";
+import { encodeArgs, type PronounceArgs } from "./protocol";
 
 export type WorkerPipe = {
   write: (line: string) => void;
@@ -58,6 +58,8 @@ export function spawnWorker(
     env: { ...process.env, BUN_BE_BUN: "1" },
     ...(cwd === undefined ? {} : { cwd }),
   });
+  const failed = (caught: unknown) =>
+    log(`could not write to the worker: ${caught instanceof Error ? caught.message : caught}`);
   let handler: (line: string) => void = () => undefined;
   const tail: string[] = [];
   void readLines(child.stdout, (line) => handler(line));
@@ -69,22 +71,36 @@ export function spawnWorker(
   });
   return {
     write: (line) => {
-      child.stdin.write(`${line}\n`);
-      void child.stdin.flush();
+      // A worker that just died has a closed pipe (EPIPE, likelier on Windows): its exit
+      // answers the call with null, so the write only has to not throw.
+      try {
+        child.stdin.write(`${line}\n`);
+        Promise.resolve(child.stdin.flush()).catch(failed);
+      } catch (caught) {
+        failed(caught);
+      }
     },
     onLine: (given) => {
       handler = given;
     },
-    signal: (signal) => child.kill(signal),
+    signal: (signal) => {
+      // On Windows any signal ends the process outright (libuv's TerminateProcess); a
+      // child that is gone already, or cannot be reached, is as stopped as it will get.
+      try {
+        child.kill(signal);
+      } catch (caught) {
+        log(`could not stop the worker: ${caught instanceof Error ? caught.message : caught}`);
+      }
+    },
     exited: child.exited,
     stderrTail: () => tail.join(" / "),
   };
 }
 
-/** The pronunciation worker for `args`: `bun pronounce/worker.ts '<args>'`. */
+/** The pronunciation worker for `args`: `bun pronounce/worker.ts <base64 of args>` (`encodeArgs`). */
 export function spawnPronounce(args: PronounceArgs, log: (line: string) => void): WorkerPipe {
   return spawnWorker(
-    [process.execPath, WORKER_SCRIPT, JSON.stringify(args)],
+    [process.execPath, WORKER_SCRIPT, encodeArgs(args)],
     log,
     join(import.meta.dir, ".."),
   );
