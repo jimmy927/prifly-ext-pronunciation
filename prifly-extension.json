@@ -1,0 +1,8 @@
+{
+  "id": "pronunciation",
+  "name": "Pronunciation",
+  "description": "Underlines the words of your English dictation said with a German or Swedish accent feature (th, z, w and v, final voicing), with how to say them.",
+  "version": "0.1.0",
+  "main": "index.ts",
+  "dictation": { "audio": true }
+}

@@ -1,0 +1,22 @@
+{
+  "name": "prifly-ext-pronunciation",
+  "private": true,
+  "license": "MIT",
+  "type": "module",
+  "description": "A prifly extension: hears English dictation and underlines words said with a German or Swedish accent feature.",
+  "scripts": {
+    "test": "bun test",
+    "typecheck": "tsc --noEmit",
+    "check": "biome check ."
+  },
+  "dependencies": {
+    "onnxruntime-node": "1.30.0",
+    "zod": "^4.6.5"
+  },
+  "devDependencies": {
+    "@biomejs/biome": "^2.6.6",
+    "@prifly/extension-api": "file:/home/jimmy/src/prifly.worktrees/pronunciation-feedback-research/packages/extension-api",
+    "@types/bun": "^1.1.14",
+    "typescript": "^7.0.2"
+  }
+}
