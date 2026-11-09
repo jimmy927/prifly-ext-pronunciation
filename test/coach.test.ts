@@ -1,6 +1,13 @@
 import { expect, test } from "bun:test";
 import type { DictationMark } from "@prifly/extension-api";
-import { Coach, detailOf, isEnglish, NOT_A_MISTAKE, NOT_MISTAKES } from "../pronounce/coach";
+import {
+  Coach,
+  detailOf,
+  isEnglish,
+  KEPT_SESSIONS,
+  NOT_A_MISTAKE,
+  NOT_MISTAKES,
+} from "../pronounce/coach";
 import type { Judged, JudgeWord } from "../pronounce/judge";
 import {
   type FakeDictation,
@@ -169,6 +176,29 @@ test("a new dictation lets go of the last one's audio", async () => {
   coach.correction(correctionOf("three", "tree", 0));
   await coach.settled();
   expect(asked).toHaveLength(2);
+});
+
+test("past the session cap the longest silent session's audio goes, and a recent one's stays", async () => {
+  const { coach, asked } = made(says([]));
+  const sessionIds = Array.from({ length: KEPT_SESSIONS + 1 }, (_, at) => `s${at}`);
+  for (const sessionId of sessionIds.slice(0, KEPT_SESSIONS)) {
+    coach.piece(threeTrees({ sessionId }));
+    await coach.settled();
+  }
+  // s0 speaks again, so s1 is now the longest silent when the session over the cap comes.
+  coach.piece(threeTrees({ sessionId: "s0", piece: 1 }));
+  await coach.settled();
+  coach.piece(threeTrees({ sessionId: `s${KEPT_SESSIONS}` }));
+  await coach.settled();
+  const before = asked.length;
+  coach.correction({ ...correctionOf("three", "tree", 0), sessionId: "s1" });
+  await coach.settled();
+  expect(asked).toHaveLength(before);
+  coach.correction({ ...correctionOf("three", "tree", 0), sessionId: "s0" });
+  await coach.settled();
+  coach.correction({ ...correctionOf("three", "tree", 0), sessionId: "s2" });
+  await coach.settled();
+  expect(asked).toHaveLength(before + 2);
 });
 
 test("Not a mistake keeps the pair in api.state, takes the mark away, and it is never marked again", async () => {

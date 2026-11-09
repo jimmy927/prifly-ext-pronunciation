@@ -11,8 +11,9 @@
  * runs, the newest that came meanwhile waits and any older one is dropped.
  *
  * The last dictation of each session is kept with its pieces' audio (prifly
- * keeps none for an extension) until the next one starts, so a correction
- * made after it ended can still be judged.
+ * keeps none for an extension) until the next one starts or the session is
+ * among the longest silent past `KEPT_SESSIONS`, so a correction made after
+ * it ended can still be judged.
  */
 
 import type {
@@ -37,6 +38,8 @@ const MAX_DETAIL = 300;
 const MAX_MARKS = 200;
 /** Pieces of a session's last dictation kept for corrections: about 64 KB of audio a second each. */
 const KEPT_PIECES = 40;
+/** Sessions whose last dictation is kept: the audio lives in prifly's long-running host. */
+export const KEPT_SESSIONS = 8;
 /** Marked pieces remembered for their marks' actions. */
 const SHOWN_GROUPS = 200;
 /** Audio samples per millisecond: the piece's audio is 16 kHz. */
@@ -181,9 +184,13 @@ export class Coach {
 
   private keep(piece: DictationPiece, audio: Float32Array): void {
     let kept = this.kept.get(piece.sessionId);
-    if (kept?.dict !== piece.dict) {
-      kept = { dict: piece.dict, pieces: new Map() };
-      this.kept.set(piece.sessionId, kept);
+    if (kept?.dict !== piece.dict) kept = { dict: piece.dict, pieces: new Map() };
+    // Set anew so the session is the newest; the longest silent ones go first.
+    this.kept.delete(piece.sessionId);
+    this.kept.set(piece.sessionId, kept);
+    for (const old of this.kept.keys()) {
+      if (this.kept.size <= KEPT_SESSIONS) break;
+      this.kept.delete(old);
     }
     kept.pieces.set(piece.piece, { words: piece.words, audio });
     for (const old of kept.pieces.keys()) {
