@@ -34,10 +34,10 @@ common in natives as in learners. Do not retune them without rerunning it.
 
 On first enable, into `<prifly data>/models/` (no account or key needed):
 
-| What | Source | Size |
-|---|---|---|
-| Phoneme model, wav2vec2-lv-60-espeak-cv-ft, uint8 (Apache-2.0) | `onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX`, `onnx/model_quantized.onnx` and `vocab.json` | 318 MB |
-| Britfone 3.0.1 pronouncing dictionary (MIT), with its `LICENSE.txt` | `JoseLlarena/Britfone` on GitHub | under 1 MB |
+| What                                                                | Source                                                                                          | Size       |
+| ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------- |
+| Phoneme model, wav2vec2-lv-60-espeak-cv-ft, uint8 (Apache-2.0)      | `onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX`, `onnx/model_quantized.onnx` and `vocab.json` | 318 MB     |
+| Britfone 3.0.1 pronouncing dictionary (MIT), with its `LICENSE.txt` | `JoseLlarena/Britfone` on GitHub                                                                | under 1 MB |
 
 Each file is pinned to a revision and a sha256 (`pronounce/models.ts`) and only
 gets its name once the hash matched. The status line in Settings → Extensions
@@ -88,15 +88,15 @@ memory and 4 cores, so run it deliberately, on a machine with room:
 
 ## What is where
 
-| File | What it is |
-|---|---|
-| `prifly-extension.json` | The manifest, with `"dictation": { "audio": true }` |
-| `index.ts` | `activate`: the extension with its real dependencies |
-| `pronounce/extension.ts` | Puts the runner and the coach together on the api |
-| `pronounce/coach.ts` | Dictation handlers, marks, "Not a mistake", the busy rule |
-| `pronounce/runner.ts`, `status.ts` | The worker's life (fetch, start, restart, stop) and the status line |
-| `pronounce/download.ts`, `models.ts` | The sha256-pinned downloader and what it fetches |
-| `pronounce/worker.ts`, `serve.ts`, `phone-model.ts`, `engine.ts`, `lifetime.ts` | The worker process |
-| `pronounce/worker-pipe.ts`, `calls.ts`, `protocol.ts`, `pcm.ts` | How the extension and the worker talk |
-| `pronounce/judge.ts`, `contrasts.ts`, `align.ts`, `ctc.ts`, `phones.ts`, `dictionary.ts`, `not-mistakes.ts` | The judging, unchanged in its rules |
-| `test/` | Tests over fakes |
+| File                                                                                                        | What it is                                                          |
+| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
+| `prifly-extension.json`                                                                                     | The manifest, with `"dictation": { "audio": true }`                 |
+| `index.ts`                                                                                                  | `activate`: the extension with its real dependencies                |
+| `pronounce/extension.ts`                                                                                    | Puts the runner and the coach together on the api                   |
+| `pronounce/coach.ts`                                                                                        | Dictation handlers, marks, "Not a mistake", the busy rule           |
+| `pronounce/runner.ts`, `status.ts`                                                                          | The worker's life (fetch, start, restart, stop) and the status line |
+| `pronounce/download.ts`, `models.ts`                                                                        | The sha256-pinned downloader and what it fetches                    |
+| `pronounce/worker.ts`, `serve.ts`, `phone-model.ts`, `engine.ts`, `lifetime.ts`                             | The worker process                                                  |
+| `pronounce/worker-pipe.ts`, `calls.ts`, `protocol.ts`, `pcm.ts`                                             | How the extension and the worker talk                               |
+| `pronounce/judge.ts`, `contrasts.ts`, `align.ts`, `ctc.ts`, `phones.ts`, `dictionary.ts`, `not-mistakes.ts` | The judging, unchanged in its rules                                 |
+| `test/`                                                                                                     | Tests over fakes                                                    |
