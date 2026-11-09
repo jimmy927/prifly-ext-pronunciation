@@ -1,18 +1,18 @@
 ---
 setup:
-  - bun install --frozen-lockfile --production --ignore-scripts
+  - bun install --frozen-lockfile --ignore-scripts
 ---
 
-The tests run from source and need only the runtime dependencies (zod, onnxruntime-node's
-JavaScript). `--ignore-scripts` skips onnxruntime-node's postinstall, which fetches its native
-binaries; the tests use fakes and never load onnxruntime.
+The tests, the typecheck and biome run from source after one install. `--ignore-scripts` skips
+onnxruntime-node's postinstall, which fetches its native binaries; the tests use fakes and never
+load onnxruntime.
 
-`--production` leaves the dev dependencies out because `@prifly/extension-api` is still a
-`file:` dependency on prifly's `packages/extension-api`, and `bun.lock` records it as a path
-relative to the checkout that wrote it, so it cannot be found from any other folder (a gate's
-scratch worktree included). Once the v0.16.0 tag is published and the dependency is
-`git+ssh://git@github.com/jimmy927/prifly-extension-api.git#v0.16.0`, drop `--production` so the
-typecheck and biome can run from this setup too.
+`@prifly/extension-api` is still a `file:` dependency on prifly's `packages/extension-api`. Bun
+writes it into `bun.lock` as a path relative to the checkout that ran the install, which no other
+folder (a gate's scratch worktree included) can find, so its entry in `bun.lock` was set to the
+absolute path by hand. An install without `--frozen-lockfile` may write it relative again. Once
+the v0.16.0 tag is published, the dependency becomes
+`git+ssh://git@github.com/jimmy927/prifly-extension-api.git#v0.16.0` and this goes away.
 
 What it relies on outside the worktree:
 - `bun` on PATH, 1.4.2 (the version that wrote `bun.lock`).
