@@ -1,4 +1,5 @@
 import { expect, test } from "bun:test";
+import type { DictationMark } from "@prifly/extension-api";
 import { Coach, detailOf, isEnglish, NOT_A_MISTAKE, NOT_MISTAKES } from "../pronounce/coach";
 import type { Judged, JudgeWord } from "../pronounce/judge";
 import {
@@ -32,7 +33,7 @@ const click = (markStart: number, markEnd: number) => ({
   action: NOT_A_MISTAKE,
 });
 
-const THREE_MARK = {
+const THREE_MARK: DictationMark = {
   start: 0,
   end: 5,
   label: "Three",

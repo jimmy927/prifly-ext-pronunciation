@@ -4,7 +4,7 @@ import { join } from "node:path";
 import type { ExtensionManifest, ExtensionModule } from "@prifly/extension-api";
 import * as extension from "../index";
 import { NOT_A_MISTAKE, NOT_MISTAKES } from "../pronounce/coach";
-import { type Started, type StartDeps, start, TOO_OLD } from "../pronounce/extension";
+import { type StartDeps, type Started, start, TOO_OLD } from "../pronounce/extension";
 import { JudgeRequest } from "../pronounce/protocol";
 import { fakeApi } from "./fake-api";
 import { fakeDictation, THREE_AS_TREE, THREE_DETAIL, threeTrees } from "./fake-dictation";
