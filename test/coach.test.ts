@@ -371,6 +371,16 @@ test("a setting changed while the extension runs takes effect at once, on the ma
   expect(fake.marks.at(-1)?.marks.map((mark) => mark.label)).toEqual(["trees"]);
 });
 
+test("a piece with only maybe marks sends nothing at first, and its marks are drawn when the setting allows them", async () => {
+  const fake = await markedWith(UNDERLINE_SURE, [0.75]);
+  expect(fake.marks).toEqual([]);
+  fake.changeSettings({ [UNDERLINE]: UNDERLINE_ALL });
+  expect(fake.marks).toHaveLength(1);
+  expect(fake.marks[0]?.marks.map((mark) => [mark.label, mark.level])).toEqual([
+    ["Three", "maybe"],
+  ]);
+});
+
 test("a change that leaves what is drawn as it was sends nothing", async () => {
   const fake = await markedWith(UNDERLINE_SURE, [0.9]);
   const shown = fake.marks.length;

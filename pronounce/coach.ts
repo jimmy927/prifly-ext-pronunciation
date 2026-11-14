@@ -267,7 +267,7 @@ export class Coach {
   /** `group`'s marks of the levels allowed given to the window; with none, only when `always` (a correction's, or marks taken away). */
   private show(group: Group, always: boolean): void {
     const drawn = group.shown.filter((one) => this.allowed.includes(one.level));
-    if (this.stopped || (drawn.length === 0 && !always)) return;
+    if (this.stopped || (group.shown.length === 0 && !always)) return;
     const key = groupKey(group);
     this.groups.delete(key);
     this.groups.set(key, group);
@@ -275,6 +275,8 @@ export class Coach {
       if (this.groups.size <= SHOWN_GROUPS) break;
       this.groups.delete(old);
     }
+    // Kept above even when nothing is drawn, so a later setting change can draw it.
+    if (drawn.length === 0 && !always) return;
     const { sessionId, dict, piece, at } = group;
     try {
       this.api.markDictation?.({
