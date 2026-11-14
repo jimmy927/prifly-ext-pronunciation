@@ -2,11 +2,22 @@
 
 A prifly extension that listens to your English dictation and puts a wavy
 underline under words said with a German or Swedish accent feature. With the
-caret in one, the hint under the message box says what was heard and how to
-say it:
+caret in one, the hint under the message box says how to fix it. Pointing at
+the word in a sent message opens a card: the word, "Sure · 94%", "You said"
+the struck-through TREE, "Say THREE" and the fix line:
 
-> **three** heard /triː/, the word is /θriː/ · th → t: tongue tip between the
-> teeth, let the air through
+> **three** The TH (as in thin) came out as a T. Tongue tip between the teeth,
+> let the air through.
+
+The respellings (`pronounce/respell.ts`) are plain English, not IPA: the
+stressed syllable in capitals, syllables joined by "-", and the swapped sound
+doubled where it stands alone after a vowel (BROW-sser to BROW-zzer, THEESS to
+THEEZZ). A mark is "sure" when the model gave the heard phone a posterior of at
+least 0.88, and "maybe" from 0.70 up to that.
+
+Settings → Extensions → Pronunciation → Underline picks which are drawn:
+"Sure mistakes only" (the default), "Sure and not sure", or "Off" (nothing is
+judged then). A change applies at once, to the marks already given too.
 
 Listen is prifly's own. "Not a mistake" keeps that word with what was heard
 in it, in `api.state`, and the pair is never marked again. A dictated word you

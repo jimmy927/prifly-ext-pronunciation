@@ -68,7 +68,7 @@ const ACCENT_SWAPS: Record<string, string> = {
 };
 
 /** Voiced consonants and the voiceless one each turns into at a word's end: the final devoicing of German and Swedish speakers. */
-const FINAL_DEVOICING: Record<string, string> = {
+export const FINAL_DEVOICING: Record<string, string> = {
   b: "p",
   d: "t",
   ɡ: "k",
@@ -91,4 +91,63 @@ export function accentContrast(expected: string, heard: string, last: boolean): 
   const how = ACCENT_SWAPS[`${expected}>${heard}`];
   if (how === undefined) return null;
   return { sound: `${phoneName(expected)} → ${phoneName(heard)}`, how };
+}
+
+/** A sound as a plain reader writes it, with the word it sounds like where the letters alone do not say it. */
+const LETTERS: Record<string, string> = {
+  θ: "TH (as in thin)",
+  ð: "TH (as in this)",
+  ʃ: "SH",
+  tʃ: "CH",
+  dʒ: "J",
+  ʒ: "ZH (as in measure)",
+};
+
+/** The sound heard, as it is named after "came out as": an article and the letters, a hissing S for s. */
+const CAME_OUT_AS: Record<string, string> = {
+  s: "a hissing S",
+  θ: "a thin TH",
+  ʃ: "an SH",
+  tʃ: "a CH",
+  dʒ: "a J",
+  ʒ: "a ZH",
+};
+
+function lettersOf(phone: string): string {
+  return LETTERS[phone] ?? phone.toUpperCase();
+}
+
+function cameOutAs(phone: string): string {
+  const known = CAME_OUT_AS[phone];
+  if (known !== undefined) return known;
+  const letters = phone.toUpperCase();
+  return `${"FHLMNRSX".includes(letters.slice(0, 1)) ? "an" : "a"} ${letters}`;
+}
+
+/** What to do about a final voiced sound that went voiceless: keep buzzing for the buzzing ones, keep the voice on for the stops. */
+function finalFix(expected: string): string {
+  const letters = lettersOf(expected);
+  return "zvð".includes(expected)
+    ? `Keep buzzing to the end: ${letters}.`
+    : `Keep the voice on to the end: ${letters}.`;
+}
+
+/** The first letter of `how` capitalised, and a full stop at its end. */
+function sentence(how: string): string {
+  return `${how.slice(0, 1).toUpperCase()}${how.slice(1)}.`;
+}
+
+/**
+ * The one line the reader sees as the fix, in plain words: no IPA, no
+ * slashes. What came out ("The end came out as a hissing S.") and what to do
+ * ("Keep buzzing to the end: Z."), from the same swaps as `accentContrast`;
+ * null for every other swap.
+ */
+export function plainFix(expected: string, heard: string, last: boolean): string | null {
+  if (last && FINAL_DEVOICING[expected] === heard) {
+    return `The end came out as ${cameOutAs(heard)}. ${finalFix(expected)}`;
+  }
+  const how = ACCENT_SWAPS[`${expected}>${heard}`];
+  if (how === undefined) return null;
+  return `The ${lettersOf(expected)} came out as ${cameOutAs(heard)}. ${sentence(how)}`;
 }

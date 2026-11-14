@@ -30,6 +30,10 @@ export const Judged = z.strictObject({
   expected: z.string(),
   sound: z.string(),
   how: z.string(),
+  posterior: z.number().min(0).max(1),
+  said: z.string(),
+  say: z.string(),
+  fix: z.string(),
 });
 
 export const PronounceLine = z.discriminatedUnion("type", [

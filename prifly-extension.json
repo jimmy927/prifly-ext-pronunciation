@@ -2,7 +2,17 @@
   "id": "pronunciation",
   "name": "Pronunciation",
   "description": "Underlines the words of your English dictation said with a German or Swedish accent feature (th, z, w and v, final voicing), with how to say them.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "main": "index.ts",
-  "dictation": { "audio": true }
+  "dictation": { "audio": true },
+  "settings": [
+    {
+      "id": "underline",
+      "label": "Underline",
+      "description": "Which words get the wavy underline. A mark is sure when the model was at least 88% sure of the sound, otherwise not sure.",
+      "type": "select",
+      "default": "Sure mistakes only",
+      "options": ["Sure mistakes only", "Sure and not sure", "Off"]
+    }
+  ]
 }

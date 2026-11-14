@@ -5,6 +5,7 @@ import type {
   DictationMarkClick,
   DictationMarks,
   DictationPiece,
+  SettingValues,
 } from "@prifly/extension-api";
 import { type FakeApi, fakeApi } from "./fake-api";
 
@@ -17,11 +18,16 @@ export type FakeDictation = FakeApi & {
   };
 };
 
-export function fakeDictation(): FakeDictation {
-  const fake = fakeApi();
+export function fakeDictation(settings?: SettingValues): FakeDictation {
+  const fake = fakeApi(settings === undefined ? {} : { settings });
   const marks: DictationMarks[] = [];
   const heard: FakeDictation["heard"] = {};
-  fake.api.features = [...(fake.api.features ?? []), "dictation-pieces", "dictation-marks"];
+  fake.api.features = [
+    ...(fake.api.features ?? []),
+    "dictation-pieces",
+    "dictation-marks",
+    "dictation-mark-levels",
+  ];
   fake.api.onDictationPiece = (handler) => {
     heard.piece = handler;
   };
@@ -52,6 +58,9 @@ export function threeTrees(patch: Partial<DictationPiece> = {}): DictationPiece 
   };
 }
 
+export const THREE_DETAIL =
+  "The TH (as in thin) came out as a T. Tongue tip between the teeth, let the air through.";
+
 /** What the judge says of "three" said with a t. */
 export const THREE_AS_TREE = {
   index: 0,
@@ -60,7 +69,8 @@ export const THREE_AS_TREE = {
   expected: "θriː",
   sound: "th → t",
   how: "tongue tip between the teeth, let the air through",
+  posterior: 0.95,
+  said: "TREE",
+  say: "THREE",
+  fix: THREE_DETAIL,
 };
-
-export const THREE_DETAIL =
-  "heard /triː/, the word is /θriː/ · th → t: tongue tip between the teeth, let the air through";

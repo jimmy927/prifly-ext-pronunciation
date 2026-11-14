@@ -214,6 +214,8 @@ export type FakeApi = {
   api: ExtensionApi;
   /** The tools of the last `tools.register`. */
   tools: () => ExtensionTool[];
+  /** The reader changes the extension's settings: `api.settings` is now `values`, and the handler `api.onSettings` was given hears it. */
+  changeSettings: (values: SettingValues) => void;
   /** Calls one registered tool the way a session would; the pick card answers `pick`. */
   callTool: (
     name: string,
@@ -252,11 +254,12 @@ export function fakeApi(
   } = {},
 ): FakeApi {
   let tools: ExtensionTool[] = [];
+  let settingsHandler: ((values: SettingValues) => void) | undefined;
   let scratchpad: string | undefined;
   /** The session of the tool call running now, as prifly knows it for `api.confirm`. */
   let calling: string | null = null;
   const { state, documents } = fakeState();
-  const fake: Omit<FakeApi, "api" | "tools" | "callTool"> = {
+  const fake: Omit<FakeApi, "api" | "tools" | "callTool" | "changeSettings"> = {
     shown: [],
     flags: new Map(),
     notices: [],
@@ -286,6 +289,9 @@ export function fakeApi(
     },
     status: (text) => void fake.statuses.push(text),
     ...(options.settings === undefined ? {} : { settings: options.settings }),
+    onSettings: (handler) => {
+      settingsHandler = handler;
+    },
     ...(options.connections === undefined ? {} : { connections: options.connections }),
     tools: {
       register: (given) => {
@@ -342,5 +348,9 @@ export function fakeApi(
       calling = null;
     }
   };
-  return { api, tools: () => tools, callTool, ...fake };
+  const changeSettings = (values: SettingValues) => {
+    api.settings = values;
+    settingsHandler?.(values);
+  };
+  return { api, tools: () => tools, callTool, changeSettings, ...fake };
 }

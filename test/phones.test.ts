@@ -1,8 +1,8 @@
 import { expect, test } from "bun:test";
 import { alignPhones } from "../pronounce/align";
-import { accentContrast } from "../pronounce/contrasts";
+import { accentContrast, plainFix } from "../pronounce/contrasts";
 import { greedyTokens, posteriors } from "../pronounce/ctc";
-import { parseDictionary, wordKey } from "../pronounce/dictionary";
+import { parseDictionary, stressOf, wordKey } from "../pronounce/dictionary";
 import { dictionaryPhone, samePhone, splitHeard } from "../pronounce/phones";
 
 test("accent variants are the same sound; a sound for another is not", () => {
@@ -113,4 +113,58 @@ test("greedy CTC merges repeats, drops the blank, and keeps each phone's frames"
     { id: 1, token: "a", from: 3, to: 4 },
     { id: 2, token: "b", from: 4, to: 5 },
   ]);
+});
+
+test("Britfone's stress marks are kept as where the stress fell, secondary only when there is no primary", () => {
+  const dictionary = parseDictionary(
+    "BECAUSE, b ɪ k ˈɒ z\nSEVEN-UP, ˌs ɛ v ə n ˈʌ p\nUH, ə\nTEA, t ˌiː\n",
+  );
+  expect(stressOf(dictionary.get("because")?.[0] ?? [])).toBe(3);
+  expect(stressOf(dictionary.get("seven-up")?.[0] ?? [])).toBe(5);
+  expect(stressOf(dictionary.get("uh")?.[0] ?? [])).toBe(-1);
+  expect(stressOf(dictionary.get("tea")?.[0] ?? [])).toBe(1);
+  expect(stressOf(["not", "from", "the", "parser"])).toBe(-1);
+});
+
+test("the plain fix is a sentence of its own for every swap, without slashes or phonetic letters", () => {
+  const phones = [
+    "θ",
+    "ð",
+    "ʃ",
+    "tʃ",
+    "dʒ",
+    "ʒ",
+    "z",
+    "s",
+    "t",
+    "d",
+    "f",
+    "v",
+    "w",
+    "b",
+    "p",
+    "ɡ",
+    "k",
+  ];
+  const fixes: string[] = [];
+  for (const expected of phones) {
+    for (const heard of phones) {
+      for (const last of [false, true]) {
+        const fix = plainFix(expected, heard, last);
+        expect(fix === null).toBe(accentContrast(expected, heard, last) === null);
+        if (fix !== null) fixes.push(fix);
+      }
+    }
+  }
+  expect(fixes.length).toBeGreaterThan(30);
+  for (const fix of fixes) {
+    expect(fix).not.toMatch(/[/ɪʊəɛæɑɒɔʌθðʃʒŋɹːɡ→]/u);
+    expect(fix.length).toBeLessThanOrEqual(200);
+  }
+  expect(plainFix("z", "s", true)).toBe(
+    "The end came out as a hissing S. Keep buzzing to the end: Z.",
+  );
+  expect(plainFix("θ", "t", false)).toBe(
+    "The TH (as in thin) came out as a T. Tongue tip between the teeth, let the air through.",
+  );
 });

@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import type { DictationMark } from "@prifly/extension-api";
+import manifest from "../prifly-extension.json";
 import {
   Coach,
   detailOf,
@@ -7,6 +8,10 @@ import {
   KEPT_SESSIONS,
   NOT_A_MISTAKE,
   NOT_MISTAKES,
+  UNDERLINE,
+  UNDERLINE_ALL,
+  UNDERLINE_OFF,
+  UNDERLINE_SURE,
 } from "../pronounce/coach";
 import type { Judged, JudgeWord } from "../pronounce/judge";
 import {
@@ -46,6 +51,10 @@ const THREE_MARK: DictationMark = {
   label: "Three",
   detail: THREE_DETAIL,
   actions: [{ id: NOT_A_MISTAKE, label: "Not a mistake", icon: "check" }],
+  level: "sure",
+  confidence: 0.95,
+  said: "TREE",
+  say: "THREE",
 };
 
 const correctionOf = (heard: string, word: string, start: number, dict = "d1") => ({
@@ -272,7 +281,123 @@ test("after stop nothing is judged or marked", async () => {
   expect(fake.marks).toEqual([]);
 });
 
-test("the hint line is at most what the window takes", () => {
+test("the hint line is the plain fix, at most what the window takes", () => {
   expect(detailOf(THREE_AS_TREE)).toBe(THREE_DETAIL);
-  expect(detailOf({ ...THREE_AS_TREE, how: "x".repeat(400) })).toHaveLength(300);
+  expect(detailOf({ fix: "x".repeat(400) })).toHaveLength(300);
+});
+
+/** The marks of a piece judged as `posteriors`, each for the word "three" said as "tree", with the setting `underline`. */
+async function markedWith(underline: string | undefined, posteriors: number[]) {
+  const fake = fakeDictation(underline === undefined ? undefined : { [UNDERLINE]: underline });
+  const { coach } = made(
+    says(posteriors.map((posterior, index) => ({ ...THREE_AS_TREE, index, posterior }))),
+    fake,
+  );
+  coach.piece(threeTrees());
+  await coach.settled();
+  return fake;
+}
+
+test("a mark carries its level, confidence, both respellings clipped to 40, and the plain fix", async () => {
+  const { coach, fake } = made(
+    says([
+      { ...THREE_AS_TREE, posterior: 0.75, said: "x".repeat(60), say: "y".repeat(60) },
+      { ...THREE_AS_TREE, index: 1, word: "trees", posterior: 0.9 },
+    ]),
+    fakeDictation({ [UNDERLINE]: UNDERLINE_ALL }),
+  );
+  coach.piece(threeTrees());
+  await coach.settled();
+  const [group] = fake.marks;
+  expect(group?.marks.map((mark) => [mark.level, mark.confidence])).toEqual([
+    ["maybe", 0.75],
+    ["sure", 0.9],
+  ]);
+  expect(group?.marks[0]?.said).toBe("x".repeat(40));
+  expect(group?.marks[0]?.say).toBe("y".repeat(40));
+  expect(group?.marks[0]?.actions).toEqual([
+    { id: NOT_A_MISTAKE, label: "Not a mistake", icon: "check" },
+  ]);
+});
+
+test("the setting 'Sure mistakes only' draws the sure marks and not the maybe ones; it is the default", async () => {
+  for (const underline of [UNDERLINE_SURE, undefined, "something else"]) {
+    const fake = await markedWith(underline, [0.75]);
+    expect(fake.marks).toEqual([]);
+  }
+  const fake = await markedWith(UNDERLINE_SURE, [0.9]);
+  expect(fake.marks[0]?.marks.map((mark) => mark.level)).toEqual(["sure"]);
+});
+
+test("the setting 'Sure and not sure' draws both levels", async () => {
+  const fake = await markedWith(UNDERLINE_ALL, [0.75]);
+  expect(fake.marks[0]?.marks.map((mark) => mark.level)).toEqual(["maybe"]);
+});
+
+test("the setting 'Off' sends no marks and judges nothing", async () => {
+  const fake = fakeDictation({ [UNDERLINE]: UNDERLINE_OFF });
+  const { coach, asked } = made(says([THREE_AS_TREE]), fake);
+  coach.piece(threeTrees());
+  coach.correction(correctionOf("three", "tree", 0));
+  await coach.settled();
+  expect(fake.marks).toEqual([]);
+  expect(asked).toEqual([]);
+});
+
+test("a setting changed while the extension runs takes effect at once, on the marks already given too", async () => {
+  const fake = fakeDictation({ [UNDERLINE]: UNDERLINE_SURE });
+  const { coach } = made(
+    says([
+      { ...THREE_AS_TREE, posterior: 0.75 },
+      { ...THREE_AS_TREE, index: 1, word: "trees", posterior: 0.9 },
+    ]),
+    fake,
+  );
+  coach.piece(threeTrees());
+  await coach.settled();
+  expect(fake.marks.at(-1)?.marks.map((mark) => mark.label)).toEqual(["trees"]);
+  fake.changeSettings({ [UNDERLINE]: UNDERLINE_ALL });
+  expect(fake.marks.at(-1)?.marks.map((mark) => mark.label)).toEqual(["Three", "trees"]);
+  fake.changeSettings({ [UNDERLINE]: UNDERLINE_OFF });
+  expect(fake.marks.at(-1)).toEqual({ sessionId: "s1", dict: "d1", piece: 0, marks: [] });
+  const shown = fake.marks.length;
+  coach.piece(threeTrees({ piece: 1 }));
+  await coach.settled();
+  expect(fake.marks).toHaveLength(shown);
+  fake.changeSettings({ [UNDERLINE]: UNDERLINE_SURE });
+  coach.piece(threeTrees({ piece: 2 }));
+  await coach.settled();
+  expect(fake.marks.at(-1)?.piece).toBe(2);
+  expect(fake.marks.at(-1)?.marks.map((mark) => mark.label)).toEqual(["trees"]);
+});
+
+test("a change that leaves what is drawn as it was sends nothing", async () => {
+  const fake = await markedWith(UNDERLINE_SURE, [0.9]);
+  const shown = fake.marks.length;
+  fake.changeSettings({ [UNDERLINE]: UNDERLINE_ALL });
+  expect(fake.marks).toHaveLength(shown);
+});
+
+test("a prifly without mark levels is given the marks as before, without the new fields", async () => {
+  const fake = fakeDictation();
+  fake.api.features = (fake.api.features ?? []).filter((name) => name !== "dictation-mark-levels");
+  const { coach } = made(says([THREE_AS_TREE]), fake);
+  coach.piece(threeTrees());
+  await coach.settled();
+  const { level: _l, confidence: _c, said: _s, say: _y, ...old } = THREE_MARK;
+  expect(fake.marks[0]?.marks).toEqual([old]);
+});
+
+test("the manifest declares the underline setting the coach reads, and the version 0.2.0", () => {
+  expect(manifest.version).toBe("0.2.0");
+  expect(manifest.settings).toEqual([
+    {
+      id: UNDERLINE,
+      label: "Underline",
+      description: expect.any(String),
+      type: "select",
+      default: UNDERLINE_SURE,
+      options: [UNDERLINE_SURE, UNDERLINE_ALL, UNDERLINE_OFF],
+    },
+  ]);
 });

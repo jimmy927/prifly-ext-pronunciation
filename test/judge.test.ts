@@ -1,7 +1,14 @@
 import { expect, test } from "bun:test";
 import type { Posteriors } from "../pronounce/ctc";
 import { parseDictionary } from "../pronounce/dictionary";
-import { judgeWords, SAMPLES_PER_FRAME, Vocab } from "../pronounce/judge";
+import {
+  judgeWords,
+  levelOf,
+  MIN_HEARD_POSTERIOR,
+  SAMPLES_PER_FRAME,
+  SURE_POSTERIOR,
+  Vocab,
+} from "../pronounce/judge";
 
 const vocab = new Vocab([
   "<pad>",
@@ -59,8 +66,34 @@ test("a th the model was sure was a t marks the word, with the sound and how to 
       expected: "θɹiː",
       sound: "th → t",
       how: "tongue tip between the teeth, let the air through",
+      posterior: expect.closeTo(0.9, 5),
+      said: "TREE",
+      say: "THREE",
+      fix: "The TH (as in thin) came out as a T. Tongue tip between the teeth, let the air through.",
     },
   ]);
+});
+
+test("a mark keeps its posterior: 0.75 is maybe, 0.9 is sure, the line between them 0.88", () => {
+  const rows = (p: number) => [blank, { t: p }, blank, { ɹ: 0.9 }, { iː: 0.9 }, blank];
+  const judge = (p: number) => judgeWords(framesOf(rows(p)), vocab, dictionary, [word("three", 6)]);
+  const [maybe] = judge(0.75);
+  const [sure] = judge(0.9);
+  expect(maybe?.posterior).toBeCloseTo(0.75, 5);
+  expect(levelOf(maybe?.posterior ?? 0)).toBe("maybe");
+  expect(sure?.posterior).toBeCloseTo(0.9, 5);
+  expect(levelOf(sure?.posterior ?? 0)).toBe("sure");
+  expect(levelOf(SURE_POSTERIOR)).toBe("sure");
+  expect(levelOf(0.8799)).toBe("maybe");
+  expect(levelOf(MIN_HEARD_POSTERIOR)).toBe("maybe");
+});
+
+test("a final d heard as t is respelt, and its fix has no phonetic letters or slashes", () => {
+  const post = framesOf([{ b: 0.9 }, { æ: 0.9 }, blank, { t: 0.95, d: 0.02 }, blank]);
+  const [judged] = judgeWords(post, vocab, dictionary, [word("bad", 5)]);
+  expect(judged?.said).toBe("BATT");
+  expect(judged?.say).toBe("BADD");
+  expect(judged?.fix).toBe("The end came out as a T. Keep the voice on to the end: D.");
 });
 
 test("a t the model was not sure of over the th is no mark", () => {

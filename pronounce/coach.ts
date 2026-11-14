@@ -22,9 +22,10 @@ import type {
   DictationMarkClick,
   DictationPiece,
   ExtensionApi,
+  SettingValues,
 } from "@prifly/extension-api";
 import { wordKey } from "./dictionary";
-import type { Judged, JudgeWord } from "./judge";
+import { type Judged, type JudgeWord, levelOf } from "./judge";
 import { isNotMistake, type NotMistake, StoredNotMistakes, withNotMistake } from "./not-mistakes";
 
 /** The id of the mark's own action; the window adds Listen itself. */
@@ -32,9 +33,26 @@ export const NOT_A_MISTAKE = "not-a-mistake";
 /** The `api.state` document the accepted pairs are kept in. */
 export const NOT_MISTAKES = "not-mistakes";
 
+/** The `underline` setting's options, as `prifly-extension.json` declares them: which marks are drawn. */
+export const UNDERLINE_SURE = "Sure mistakes only";
+export const UNDERLINE_ALL = "Sure and not sure";
+export const UNDERLINE_OFF = "Off";
+/** The setting's id in `api.settings`. */
+export const UNDERLINE = "underline";
+
+type Level = "sure" | "maybe";
+
+/** The levels each option of the `underline` setting draws; an unknown value is the default, sure only. */
+function allowedLevels(value: unknown): readonly Level[] {
+  if (value === UNDERLINE_OFF) return [];
+  return value === UNDERLINE_ALL ? ["sure", "maybe"] : ["sure"];
+}
+
 /** `markDictation`'s limits. */
 const MAX_LABEL = 64;
 const MAX_DETAIL = 300;
+/** `DictationMark`'s limit for `said` and `say`. */
+const MAX_SPELLING = 40;
 const MAX_MARKS = 200;
 /** Pieces of a session's last dictation kept for corrections: about 64 KB of audio a second each. */
 const KEPT_PIECES = 40;
@@ -50,15 +68,18 @@ export type JudgeFn = (
   words: readonly JudgeWord[],
 ) => Promise<Judged[] | null>;
 
-type CoachApi = Pick<ExtensionApi, "markDictation" | "state" | "log">;
+type CoachApi = Pick<
+  ExtensionApi,
+  "markDictation" | "state" | "log" | "features" | "settings" | "onSettings"
+>;
 
 /** A word as it stands where its mark goes: its text and its offsets. */
 type Spot = { text: string; start: number; end: number };
 
 type KeptPiece = { words: DictationPiece["words"]; audio: Float32Array };
 
-/** A mark as given, with the word and what was heard in it, for "Not a mistake". */
-type Shown = { mark: DictationMark; word: string; heard: string };
+/** A mark as given, with the word and what was heard in it, for "Not a mistake", and how sure it is: whether it is drawn is the setting's. */
+type Shown = { mark: DictationMark; word: string; heard: string; level: Level };
 
 /** The marks given to one piece of a dictation, from `at` when a correction's. */
 type Group = { sessionId: string; dict: string; piece: number; at?: number; shown: Shown[] };
@@ -71,10 +92,9 @@ export function isEnglish(language: string): boolean {
   return lower === "en" || lower.startsWith("en-");
 }
 
-/** The hint line after the bold word: what was heard, what the word is, the sound and how to say it. */
-export function detailOf(judged: Pick<Judged, "heard" | "expected" | "sound" | "how">): string {
-  const { heard, expected, sound, how } = judged;
-  return `heard /${heard}/, the word is /${expected}/ · ${sound}: ${how}`.slice(0, MAX_DETAIL);
+/** The hint line after the bold word: one plain line on the fix, no phonetic letters. */
+export function detailOf(judged: Pick<Judged, "fix">): string {
+  return judged.fix.slice(0, MAX_DETAIL);
 }
 
 const groupKey = (where: { sessionId: string; dict: string; piece: number; at?: number }) =>
@@ -96,10 +116,26 @@ export class Coach {
   private waiting: Task | null = null;
   private draining: Promise<void> | null = null;
   private stopped = false;
+  /** The levels drawn, from the `underline` setting as it is now. */
+  private allowed: readonly Level[];
 
   constructor(api: CoachApi, judge: JudgeFn) {
     this.api = api;
     this.judge = judge;
+    this.allowed = allowedLevels(api.settings?.[UNDERLINE]);
+    api.onSettings?.((values) => this.settingsChanged(values));
+  }
+
+  /** The `underline` setting changed: the marks already given are drawn or taken away to match. */
+  private settingsChanged(values: SettingValues): void {
+    if (this.stopped) return;
+    const before = this.allowed;
+    this.allowed = allowedLevels(values[UNDERLINE]);
+    for (const group of [...this.groups.values()]) {
+      const drawn = (levels: readonly Level[]) =>
+        group.shown.filter((one) => levels.includes(one.level)).length;
+      if (drawn(before) !== drawn(this.allowed)) this.show(group, true);
+    }
   }
 
   /** The pairs the reader accepted before, from `api.state`. */
@@ -113,6 +149,7 @@ export class Coach {
     if (this.stopped || !isEnglish(piece.language) || audio === undefined) return;
     if (piece.words.length === 0) return;
     this.keep(piece, audio);
+    if (this.allowed.length === 0) return;
     const spots = piece.words.map(({ text, start, end }) => ({ text, start, end }));
     const asked = piece.words.map((word) => ({ word: word.text, ...samplesOf(word) }));
     const where = { sessionId: piece.sessionId, dict: piece.dict, piece: piece.piece };
@@ -128,7 +165,7 @@ export class Coach {
     const kept = this.kept.get(correction.sessionId);
     const piece = kept?.dict === correction.dict ? kept.pieces.get(correction.piece) : undefined;
     const said = piece?.words.find((word) => wordKey(word.text) === wordKey(correction.heard));
-    if (piece === undefined || said === undefined) return;
+    if (piece === undefined || said === undefined || this.allowed.length === 0) return;
     const { sessionId, dict, word, start: at } = correction;
     const asked = [{ word, ...samplesOf(said) }];
     const spots = [{ text: word, start: 0, end: word.length }];
@@ -205,21 +242,32 @@ export class Coach {
       const spot = spots[one.index];
       if (spot === undefined || spot.text.length > MAX_LABEL) return [];
       if (isNotMistake(this.notMistakes, one.word, one.heard)) return [];
+      const level = levelOf(one.posterior);
       const mark: DictationMark = {
         start: spot.start,
         end: spot.end,
         label: spot.text,
         detail: detailOf(one),
         actions: [{ id: NOT_A_MISTAKE, label: "Not a mistake", icon: "check" }],
+        // An older prifly refuses the fields, and draws every mark as sure.
+        ...(this.api.features?.includes("dictation-mark-levels") === true
+          ? {
+              level,
+              confidence: one.posterior,
+              said: one.said.slice(0, MAX_SPELLING),
+              say: one.say.slice(0, MAX_SPELLING),
+            }
+          : {}),
       };
-      return [{ mark, word: one.word, heard: one.heard }];
+      return [{ mark, word: one.word, heard: one.heard, level }];
     });
     return shown.slice(0, MAX_MARKS);
   }
 
-  /** `group`'s marks given to the window; with none, only when `always` (a correction's, or marks taken away). */
+  /** `group`'s marks of the levels allowed given to the window; with none, only when `always` (a correction's, or marks taken away). */
   private show(group: Group, always: boolean): void {
-    if (this.stopped || (group.shown.length === 0 && !always)) return;
+    const drawn = group.shown.filter((one) => this.allowed.includes(one.level));
+    if (this.stopped || (drawn.length === 0 && !always)) return;
     const key = groupKey(group);
     this.groups.delete(key);
     this.groups.set(key, group);
@@ -234,7 +282,7 @@ export class Coach {
         dict,
         piece,
         ...(at === undefined ? {} : { at }),
-        marks: group.shown.map((one) => one.mark),
+        marks: drawn.map((one) => one.mark),
       });
     } catch (caught) {
       if (!(caught instanceof Error)) throw caught;

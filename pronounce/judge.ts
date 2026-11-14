@@ -17,15 +17,18 @@
  */
 
 import { alignPhones, type Step } from "./align";
-import { accentContrast, type Contrast } from "./contrasts";
+import { accentContrast, type Contrast, plainFix } from "./contrasts";
 import { greedyTokens, type HeardToken, type Posteriors, probAt } from "./ctc";
-import { type Dictionary, wordKey } from "./dictionary";
+import { type Dictionary, stressOf, wordKey } from "./dictionary";
 import { splitHeard } from "./phones";
+import { respellPair } from "./respell";
 
 /** Audio samples per model frame: wav2vec2's 20 ms at 16 kHz. */
 export const SAMPLES_PER_FRAME = 320;
 /** The heard phone's highest probability over its frames must reach this for a substitution to count. */
 export const MIN_HEARD_POSTERIOR = 0.7;
+/** From this posterior up a mark is "sure"; from `MIN_HEARD_POSTERIOR` to just under it, "maybe". */
+export const SURE_POSTERIOR = 0.88;
 /** Model frames (20 ms) a word's time is widened by on each side: Parakeet's frames are 80 ms, and a token comes at or after its sound. */
 export const WORD_SLACK_FRAMES = 2;
 
@@ -41,7 +44,7 @@ export const FUNCTION_WORDS: ReadonlySet<string> = new Set(
 /** A word to check: as it is to be said (`word`), and its samples in the piece's audio. */
 export type JudgeWord = { word: string; from: number; to: number };
 
-/** A word said otherwise: which of the words asked about (`index`), the phones heard and expected, and the sound. */
+/** A word said otherwise: which of the words asked about (`index`), the phones heard and expected, the sound, how sure the model was (`posterior`), and for the reader the word respelt as heard (`said`) and as it should be said (`say`, `respell.ts`) with one plain line on the fix. */
 export type Judged = {
   index: number;
   word: string;
@@ -49,7 +52,16 @@ export type Judged = {
   expected: string;
   sound: string;
   how: string;
+  posterior: number;
+  said: string;
+  say: string;
+  fix: string;
 };
+
+/** How sure a mark with this posterior is: "sure" from `SURE_POSTERIOR`, "maybe" below it. */
+export function levelOf(posterior: number): "sure" | "maybe" {
+  return posterior >= SURE_POSTERIOR ? "sure" : "maybe";
+}
 
 /** A heard phone, from a token the model may have written as two (`splitHeard`). */
 type HeardPhone = { phone: string; id: number; from: number; to: number };
@@ -70,8 +82,15 @@ export function vocabFrom(json: Record<string, number>): Vocab {
   return new Vocab(Array.from(tokens, (token) => token ?? "<unk>"));
 }
 
-/** An accent-feature substitution the model was sure of, with how sure and what to say of it. */
-type Finding = { posterior: number; contrast: Contrast };
+/** An accent-feature substitution the model was sure of, with how sure and what to say of it, and where it is: the phone of the pronunciation at `at`, heard as `heard`. */
+type Finding = {
+  posterior: number;
+  contrast: Contrast;
+  fix: string;
+  at: number;
+  heard: string;
+  last: boolean;
+};
 
 /** The highest probability of the heard phone over its frames. */
 function heardPeak(post: Posteriors, heard: HeardPhone): number {
@@ -92,9 +111,11 @@ function findingOf(
   if (heard === undefined) return null;
   const last = step.expected === said.length - 1;
   const contrast = accentContrast(said[step.expected] ?? "", heard.phone, last);
-  if (contrast === null) return null;
+  const fix = plainFix(said[step.expected] ?? "", heard.phone, last);
+  if (contrast === null || fix === null) return null;
   const posterior = heardPeak(post, heard);
-  return posterior >= MIN_HEARD_POSTERIOR ? { posterior, contrast } : null;
+  if (posterior < MIN_HEARD_POSTERIOR) return null;
+  return { posterior, contrast, fix, at: step.expected, heard: heard.phone, last };
 }
 
 /** The confident accent-feature differences of one pronunciation from what was heard. */
@@ -148,12 +169,24 @@ function judgeWord(
       chosen = { said, finding: surest };
   }
   if (chosen === null) return null;
+  const { finding } = chosen;
+  const { said, say } = respellPair(
+    chosen.said,
+    stressOf(chosen.said),
+    finding.at,
+    finding.heard,
+    finding.last,
+  );
   return {
     index,
     word: word.word,
     heard: heard.map((h) => h.phone).join(""),
     expected: chosen.said.join(""),
-    ...chosen.finding.contrast,
+    ...finding.contrast,
+    posterior: finding.posterior,
+    said,
+    say,
+    fix: finding.fix,
   };
 }
 

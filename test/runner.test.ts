@@ -78,6 +78,10 @@ test("a piece goes to the worker with only its words' text and time, and its mar
     expected: "θɹiː",
     sound: "th → t",
     how: "",
+    posterior: 0.9,
+    said: "TREE",
+    say: "THREE",
+    fix: "",
   };
   worker?.say({ type: "marks", id: request.id, marks: [judged], ms: 12 });
   expect(await marks).toEqual([judged]);
