@@ -115,10 +115,28 @@ test("onnxruntime that will not load is reported with the loader's words", async
 test("the worker exits when its parent changes, not before", async () => {
   let parent = 10;
   let exits = 0;
-  const stop = exitWhenOrphaned({ ppid: () => parent, exit: () => exits++, everyMs: 1 });
+  const stop = exitWhenOrphaned({
+    ppid: () => parent,
+    alive: () => true,
+    exit: () => exits++,
+    everyMs: 1,
+  });
   await Bun.sleep(5);
   expect(exits).toBe(0);
   parent = 1;
+  await Bun.sleep(5);
+  stop();
+  expect(exits).toBeGreaterThan(0);
+});
+
+test("the worker exits when its parent no longer runs, though its pid is the same", async () => {
+  let exits = 0;
+  const stop = exitWhenOrphaned({
+    ppid: () => 10,
+    alive: () => false,
+    exit: () => exits++,
+    everyMs: 1,
+  });
   await Bun.sleep(5);
   stop();
   expect(exits).toBeGreaterThan(0);
