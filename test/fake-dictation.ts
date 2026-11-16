@@ -2,6 +2,7 @@
 
 import type {
   DictationCorrection,
+  DictationMarkAudio,
   DictationMarkClick,
   DictationMarks,
   DictationPiece,
@@ -14,7 +15,9 @@ export type FakeDictation = FakeApi & {
   heard: {
     piece?: (piece: DictationPiece) => void | Promise<void>;
     correction?: (correction: DictationCorrection) => void | Promise<void>;
-    action?: (click: DictationMarkClick) => void | Promise<void>;
+    action?: (
+      click: DictationMarkClick,
+    ) => void | DictationMarkAudio | Promise<void | DictationMarkAudio>;
   };
 };
 
