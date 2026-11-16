@@ -17,7 +17,7 @@ export type FakeDictation = FakeApi & {
     correction?: (correction: DictationCorrection) => void | Promise<void>;
     action?: (
       click: DictationMarkClick,
-    ) => void | DictationMarkAudio | Promise<void | DictationMarkAudio>;
+    ) => void | DictationMarkAudio | Promise<undefined | DictationMarkAudio>;
   };
 };
 
