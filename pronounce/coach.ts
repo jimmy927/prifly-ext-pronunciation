@@ -27,11 +27,16 @@ import type {
 import { wordKey } from "./dictionary";
 import { type Judged, type JudgeWord, levelOf } from "./judge";
 import { isNotMistake, type NotMistake, StoredNotMistakes, withNotMistake } from "./not-mistakes";
+import { MARK_AUDIO, type PlayAction, type PlayResult } from "./play-shim";
+import type { Voice } from "./voice";
 
 /** The id of the mark's own action; the window adds Listen itself. */
 export const NOT_A_MISTAKE = "not-a-mistake";
 /** The `api.state` document the accepted pairs are kept in. */
 export const NOT_MISTAKES = "not-mistakes";
+/** The ids of the two play actions, with "dictation-mark-audio": the reader's own word, and it said right in their voice. */
+export const PLAY_YOURS = "play-yours";
+export const PLAY_RIGHT = "play-right";
 
 /** The `underline` setting's options, as `prifly-extension.json` declares them: which marks are drawn. */
 export const UNDERLINE_SURE = "Sure mistakes only";
@@ -74,12 +79,19 @@ type CoachApi = Pick<
 >;
 
 /** A word as it stands where its mark goes: its text and its offsets. */
-type Spot = { text: string; start: number; end: number };
+type Spot = { text: string; start: number; end: number; from: number; to: number };
 
-type KeptPiece = { words: DictationPiece["words"]; audio: Float32Array };
+type KeptPiece = { text: string; words: DictationPiece["words"]; audio: Float32Array };
 
-/** A mark as given, with the word and what was heard in it, for "Not a mistake", and how sure it is: whether it is drawn is the setting's. */
-type Shown = { mark: DictationMark; word: string; heard: string; level: Level };
+/** A mark as given, with the word and what was heard in it, for "Not a mistake", and how sure it is: whether it is drawn is the setting's. `from` and `to` are the word's samples in the piece's audio. */
+type Shown = {
+  mark: DictationMark;
+  word: string;
+  heard: string;
+  level: Level;
+  from: number;
+  to: number;
+};
 
 /** The marks given to one piece of a dictation, from `at` when a correction's. */
 type Group = { sessionId: string; dict: string; piece: number; at?: number; shown: Shown[] };
@@ -109,6 +121,7 @@ function samplesOf(word: { startMs: number; endMs: number }): { from: number; to
 export class Coach {
   private readonly api: CoachApi;
   private readonly judge: JudgeFn;
+  private readonly voice: Pick<Voice, "yours" | "sayRight"> | null;
   private notMistakes: NotMistake[] = [];
   /** Each session's last dictation: its id, and its pieces by number. */
   private readonly kept = new Map<string, { dict: string; pieces: Map<number, KeptPiece> }>();
@@ -119,9 +132,14 @@ export class Coach {
   /** The levels drawn, from the `underline` setting as it is now. */
   private allowed: readonly Level[];
 
-  constructor(api: CoachApi, judge: JudgeFn) {
+  constructor(
+    api: CoachApi,
+    judge: JudgeFn,
+    voice: Pick<Voice, "yours" | "sayRight"> | null = null,
+  ) {
     this.api = api;
     this.judge = judge;
+    this.voice = voice;
     this.allowed = allowedLevels(api.settings?.[UNDERLINE]);
     api.onSettings?.((values) => this.settingsChanged(values));
   }
@@ -150,7 +168,12 @@ export class Coach {
     if (piece.words.length === 0) return;
     this.keep(piece, audio);
     if (this.allowed.length === 0) return;
-    const spots = piece.words.map(({ text, start, end }) => ({ text, start, end }));
+    const spots = piece.words.map((word) => ({
+      text: word.text,
+      start: word.start,
+      end: word.end,
+      ...samplesOf(word),
+    }));
     const asked = piece.words.map((word) => ({ word: word.text, ...samplesOf(word) }));
     const where = { sessionId: piece.sessionId, dict: piece.dict, piece: piece.piece };
     this.run(async () => {
@@ -168,7 +191,7 @@ export class Coach {
     if (piece === undefined || said === undefined || this.allowed.length === 0) return;
     const { sessionId, dict, word, start: at } = correction;
     const asked = [{ word, ...samplesOf(said) }];
-    const spots = [{ text: word, start: 0, end: word.length }];
+    const spots = [{ text: word, start: 0, end: word.length, ...samplesOf(said) }];
     this.run(async () => {
       const judged = await this.judge(piece.audio, asked);
       this.api.log("recheck", { heard: correction.heard, word, marks: judged?.length ?? -1 });
@@ -184,16 +207,22 @@ export class Coach {
     });
   }
 
-  /** "Not a mistake" on a mark: the pair kept, and its marks taken away wherever they are. */
-  async action(click: DictationMarkClick): Promise<void> {
-    if (this.stopped || click.action !== NOT_A_MISTAKE) return;
-    const hit = this.groups
-      .get(groupKey(click))
-      ?.shown.find((one) => one.mark.start === click.markStart && one.mark.end === click.markEnd);
-    if (hit === undefined) {
+  /**
+   * A click on a mark's action: "Not a mistake" keeps the pair and takes its marks away wherever
+   * they are; "Yours" and "Say it right" answer with the audio to play.
+   */
+  async action(click: DictationMarkClick): Promise<undefined | PlayResult> {
+    const play = click.action === PLAY_YOURS || click.action === PLAY_RIGHT;
+    if (this.stopped || (click.action !== NOT_A_MISTAKE && !play)) return undefined;
+    const group = this.groups.get(groupKey(click));
+    const hit = group?.shown.find(
+      (one) => one.mark.start === click.markStart && one.mark.end === click.markEnd,
+    );
+    if (group === undefined || hit === undefined) {
       this.api.log("unknownMark", { markStart: click.markStart, markEnd: click.markEnd });
-      return;
+      return undefined;
     }
+    if (play) return this.play(click.action, group, hit);
     const { word, heard } = hit;
     this.api.log("notMistake", { word, heard });
     this.notMistakes = withNotMistake(this.notMistakes, word, heard);
@@ -203,6 +232,35 @@ export class Coach {
     for (const group of [...this.groups.values()]) {
       const shown = group.shown.filter((one) => !isNotMistake([hit], one.word, one.heard));
       if (shown.length !== group.shown.length) this.show({ ...group, shown }, true);
+    }
+    return undefined;
+  }
+
+  /** The audio of a play action: the reader's own word, or the sentence (the word, for a correction) said right in their voice. */
+  private async play(action: string, group: Group, hit: Shown): Promise<PlayResult> {
+    const kept = this.kept.get(group.sessionId);
+    const piece = kept?.dict === group.dict ? kept.pieces.get(group.piece) : undefined;
+    if (this.voice === null || piece === undefined || hit.to <= hit.from) {
+      throw new Error("That audio is no longer kept: only the last dictation of a session is");
+    }
+    try {
+      if (action === PLAY_YOURS) {
+        return { audio: await this.voice.yours(piece.audio.slice(hit.from, hit.to)) };
+      }
+      const first = piece.words[0];
+      const last = piece.words[piece.words.length - 1];
+      const whole = group.at === undefined && first !== undefined && last !== undefined;
+      const span = whole ? { from: samplesOf(first).from, to: samplesOf(last).to } : hit;
+      const audio = await this.voice.sayRight({
+        key: whole ? groupKey(group) : `${groupKey(group)}\n${hit.word}`,
+        text: whole ? piece.text : hit.word,
+        clip: piece.audio.slice(span.from, span.to),
+        pool: [...(kept?.pieces.values() ?? [])].map((one) => one.audio),
+      });
+      return { audio };
+    } catch (caught) {
+      if (caught instanceof Error) this.api.log("playFailed", { action, error: caught.message });
+      throw caught;
     }
   }
 
@@ -229,7 +287,7 @@ export class Coach {
       if (this.kept.size <= KEPT_SESSIONS) break;
       this.kept.delete(old);
     }
-    kept.pieces.set(piece.piece, { words: piece.words, audio });
+    kept.pieces.set(piece.piece, { text: piece.text, words: piece.words, audio });
     for (const old of kept.pieces.keys()) {
       if (kept.pieces.size <= KEPT_PIECES) break;
       kept.pieces.delete(old);
@@ -248,7 +306,10 @@ export class Coach {
         end: spot.end,
         label: spot.text,
         detail: detailOf(one),
-        actions: [{ id: NOT_A_MISTAKE, label: "Not a mistake", icon: "check" }],
+        actions: [
+          { id: NOT_A_MISTAKE, label: "Not a mistake", icon: "check" },
+          ...this.playActions(),
+        ],
         // An older prifly refuses the fields, and draws every mark as sure.
         ...(this.api.features?.includes("dictation-mark-levels") === true
           ? {
@@ -259,9 +320,18 @@ export class Coach {
             }
           : {}),
       };
-      return [{ mark, word: one.word, heard: one.heard, level }];
+      return [{ mark, word: one.word, heard: one.heard, level, from: spot.from, to: spot.to }];
     });
     return shown.slice(0, MAX_MARKS);
+  }
+
+  /** "Yours" and "Say it right", only where prifly plays what a click answers with; an older prifly gets none. */
+  private playActions(): PlayAction[] {
+    if (this.voice === null || this.api.features?.includes(MARK_AUDIO) !== true) return [];
+    return [
+      { id: PLAY_YOURS, label: "Yours", kind: "play" },
+      { id: PLAY_RIGHT, label: "Say it right", kind: "play" },
+    ];
   }
 
   /** `group`'s marks of the levels allowed given to the window; with none, only when `always` (a correction's, or marks taken away). */

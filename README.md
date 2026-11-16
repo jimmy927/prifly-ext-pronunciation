@@ -28,6 +28,42 @@ waits.
 
 Settings → Extensions shows it as "Hears your dictation (with audio)".
 
+## Yours and Say it right
+
+With a prifly that has the feature "dictation-mark-audio" (not landed in prifly
+yet; an older prifly gets no such buttons), a mark's card has two buttons under
+"Say": **Yours** plays your own word, cut from the piece audio the extension
+keeps for corrections, and **Say it right** plays your sentence said correctly
+in your own voice, at your own speed. Both are 44.1 kHz wavs; nothing at 22
+kHz or below is made or played. The card shows its spinner while the clip is
+made; a clip is made on the first click and kept in `<prifly data>/pronunciation/voice/`.
+
+Say it right is made like the research run's variant B (`pronounce/voice.ts`):
+
+1. The sentence (the corrected word, for a correction) read by Edge TTS
+   en-GB-RyanNeural, kept at its native 24 kHz.
+2. Time-matched to you: Seed-VC's `--length-adjust` is your clip's length over
+   the reading's (kept between 0.4 and 2.5).
+3. Seed-VC `inference.py` with `--f0-condition True --auto-f0-adjust True
+   --diffusion-steps 100 --inference-cfg-rate 0.7`, the 44.1 kHz model.
+4. Your voice reference: the wav in "Your voice sample", or, when empty, your
+   cleanest recent pieces (about 20 s).
+
+Seed-VC needs a GPU, and prifly's extension api cannot rent one for an
+extension on demand (`api.onRent` answers only the New session dialog's rent
+row; `api.machines.report` only lists boxes), so the box is a setting: **Voice
+box (ssh)** (`root@ssh2.vast.ai`), **Voice box port** and **Voice box key
+file**. The first click puts `pronounce/box/runner.py` there and has it install
+Seed-VC, edge-tts and ffmpeg (minutes, once); each clip after that is a few ssh
+calls (`pronounce/box.ts`). The box costs money while it runs: stop it when
+you are done.
+
+Limits: prifly gives an extension 16 kHz audio only, so **Yours** is that cut
+resampled up to 44.1 kHz (the content stays band-limited to 8 kHz), and without
+a "Your voice sample" the reference is 16 kHz speech too, so the voice is
+less like yours than with a clean full-quality sample. `pronounce/play-shim.ts`
+holds the types of the "dictation-mark-audio" api until the package has them.
+
 ## What it marks
 
 Only substitutions that are accent features: z to s, a final voiced consonant
@@ -188,6 +224,7 @@ memory and 4 cores, so run it deliberately, on a machine with room:
 | `index.ts`                                                                                                  | `activate`: the extension with its real dependencies                |
 | `pronounce/extension.ts`                                                                                    | Puts the runner and the coach together on the api                   |
 | `pronounce/coach.ts`                                                                                        | Dictation handlers, marks, "Not a mistake", the busy rule           |
+| `pronounce/voice.ts`, `box.ts`, `box/runner.py`, `wav.ts`, `play-shim.ts`                                   | Yours and Say it right: the clips, the GPU box, the box's script    |
 | `pronounce/runner.ts`, `status.ts`                                                                          | The worker's life (fetch, start, restart, stop) and the status line |
 | `pronounce/download.ts`, `models.ts`                                                                        | The sha256-pinned downloader and what it fetches                    |
 | `pronounce/worker.ts`, `serve.ts`, `phone-model.ts`, `engine.ts`, `lifetime.ts`                             | The worker process                                                  |

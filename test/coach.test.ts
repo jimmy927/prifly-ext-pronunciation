@@ -398,8 +398,8 @@ test("a prifly without mark levels is given the marks as before, without the new
   expect(fake.marks[0]?.marks).toEqual([old]);
 });
 
-test("the manifest declares the underline setting the coach reads, and the version 0.2.0", () => {
-  expect(manifest.version).toBe("0.2.0");
+test("the manifest declares the underline setting the coach reads, the voice box settings, and the version 0.3.0", () => {
+  expect(manifest.version).toBe("0.3.0");
   expect(manifest.settings).toEqual([
     {
       id: UNDERLINE,
@@ -408,6 +408,36 @@ test("the manifest declares the underline setting the coach reads, and the versi
       type: "select",
       default: UNDERLINE_SURE,
       options: [UNDERLINE_SURE, UNDERLINE_ALL, UNDERLINE_OFF],
+    },
+    {
+      id: "voiceBox",
+      label: expect.any(String),
+      description: expect.any(String),
+      type: "string",
+      default: "",
+    },
+    {
+      id: "voiceBoxPort",
+      label: expect.any(String),
+      description: expect.any(String),
+      type: "number",
+      default: 0,
+      min: 0,
+      max: 65_535,
+    },
+    {
+      id: "voiceBoxKey",
+      label: expect.any(String),
+      description: expect.any(String),
+      type: "string",
+      default: "",
+    },
+    {
+      id: "voiceReference",
+      label: expect.any(String),
+      description: expect.any(String),
+      type: "string",
+      default: "",
     },
   ]);
 });

@@ -2,7 +2,7 @@
   "id": "pronunciation",
   "name": "Pronunciation",
   "description": "Underlines the words of your English dictation said with a German or Swedish accent feature (th, z, w and v, final voicing), with how to say them.",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "main": "index.ts",
   "dictation": { "audio": true },
   "settings": [
@@ -13,6 +13,36 @@
       "type": "select",
       "default": "Sure mistakes only",
       "options": ["Sure mistakes only", "Sure and not sure", "Off"]
+    },
+    {
+      "id": "voiceBox",
+      "label": "Voice box (ssh)",
+      "description": "Where Say it right is made: a GPU machine you have ssh access to, such as root@ssh2.vast.ai. The first click installs Seed-VC there (minutes, once). Empty: no Say it right.",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "id": "voiceBoxPort",
+      "label": "Voice box port",
+      "description": "The box's ssh port; 0 is ssh's own default.",
+      "type": "number",
+      "default": 0,
+      "min": 0,
+      "max": 65535
+    },
+    {
+      "id": "voiceBoxKey",
+      "label": "Voice box key file",
+      "description": "The ssh private key file for the box; empty uses ssh's own.",
+      "type": "string",
+      "default": ""
+    },
+    {
+      "id": "voiceReference",
+      "label": "Your voice sample",
+      "description": "A wav of your voice, about 20 s of clean full-quality speech. Empty: your cleanest recent dictation, which prifly gives at 16 kHz, so the voice comes out less like yours.",
+      "type": "string",
+      "default": ""
     }
   ]
 }
