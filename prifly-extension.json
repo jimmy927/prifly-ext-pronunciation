@@ -40,7 +40,7 @@
     {
       "id": "voiceReference",
       "label": "Your voice sample",
-      "description": "A wav of your voice, about 20 s of clean full-quality speech. Empty: your cleanest recent dictation, which prifly gives at 16 kHz, so the voice comes out less like yours.",
+      "description": "A wav of your voice, about 20 s of clean full-quality speech. Empty: your cleanest recent dictation at full rate, when prifly gives it.",
       "type": "string",
       "default": ""
     }

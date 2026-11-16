@@ -47,7 +47,7 @@ Say it right is made like the research run's variant B (`pronounce/voice.ts`):
 3. Seed-VC `inference.py` with `--f0-condition True --auto-f0-adjust True
    --diffusion-steps 100 --inference-cfg-rate 0.7`, the 44.1 kHz model.
 4. Your voice reference: the wav in "Your voice sample", or, when empty, your
-   cleanest recent pieces (about 20 s).
+   cleanest recent full-rate pieces (about 20 s).
 
 Seed-VC needs a GPU, and prifly's extension api cannot rent one for an
 extension on demand (`api.onRent` answers only the New session dialog's rent
@@ -58,11 +58,14 @@ Seed-VC, edge-tts and ffmpeg (minutes, once); each clip after that is a few ssh
 calls (`pronounce/box.ts`). The box costs money while it runs: stop it when
 you are done.
 
-Limits: prifly gives an extension 16 kHz audio only, so **Yours** is that cut
-resampled up to 44.1 kHz (the content stays band-limited to 8 kHz), and without
-a "Your voice sample" the reference is 16 kHz speech too, so the voice is
-less like yours than with a clean full-quality sample. `pronounce/play-shim.ts`
-holds the types of the "dictation-mark-audio" api until the package has them.
+Full-rate audio: prifly's piece audio is 16 kHz, and this extension never
+plays that, nor that resampled up. It needs the piece's audio at the device's
+own rate (`audioFull`, 48 kHz say; the feature "dictation-audio-full", extension
+api 0.18, not landed yet). **Yours** is cut from it and played at that rate, and
+without it there is no Yours button. The voice reference is made only from
+full-rate pieces (or the wav in "Your voice sample"); with neither, Say it right
+says it has no reference. `pronounce/play-shim.ts` holds the types of
+"dictation-mark-audio" and `audioFull` until the package has them.
 
 ## What it marks
 

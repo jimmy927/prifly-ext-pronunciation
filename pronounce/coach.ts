@@ -27,8 +27,14 @@ import type {
 import { wordKey } from "./dictionary";
 import { type Judged, type JudgeWord, levelOf } from "./judge";
 import { isNotMistake, type NotMistake, StoredNotMistakes, withNotMistake } from "./not-mistakes";
-import { MARK_AUDIO, type PlayAction, type PlayResult } from "./play-shim";
-import type { Voice } from "./voice";
+import {
+  type AudioFull,
+  type FullPiece,
+  MARK_AUDIO,
+  type PlayAction,
+  type PlayResult,
+} from "./play-shim";
+import { MIN_RATE, PIECE_RATE, type Voice } from "./voice";
 
 /** The id of the mark's own action; the window adds Listen itself. */
 export const NOT_A_MISTAKE = "not-a-mistake";
@@ -81,7 +87,13 @@ type CoachApi = Pick<
 /** A word as it stands where its mark goes: its text and its offsets. */
 type Spot = { text: string; start: number; end: number; from: number; to: number };
 
-type KeptPiece = { text: string; words: DictationPiece["words"]; audio: Float32Array };
+/** `full` is the piece at the device's own rate, kept only when it is 44.1 kHz or more. */
+type KeptPiece = {
+  text: string;
+  words: DictationPiece["words"];
+  audio: Float32Array;
+  full?: AudioFull;
+};
 
 /** A mark as given, with the word and what was heard in it, for "Not a mistake", and how sure it is: whether it is drawn is the setting's. `from` and `to` are the word's samples in the piece's audio. */
 type Shown = {
@@ -116,6 +128,12 @@ const groupKey = (where: { sessionId: string; dict: string; piece: number; at?: 
 function samplesOf(word: { startMs: number; endMs: number }): { from: number; to: number } {
   const from = Math.max(0, Math.round(word.startMs * SAMPLES_PER_MS));
   return { from, to: Math.max(from, Math.round(word.endMs * SAMPLES_PER_MS)) };
+}
+
+/** The piece's audio at the device's own rate, when prifly gave it and it is 44.1 kHz or more. */
+function fullRateOf(piece: DictationPiece): AudioFull | undefined {
+  const full = (piece as FullPiece).audioFull;
+  return full !== undefined && full.rate >= MIN_RATE && full.samples.length > 0 ? full : undefined;
 }
 
 export class Coach {
@@ -166,7 +184,8 @@ export class Coach {
     const { audio } = piece;
     if (this.stopped || !isEnglish(piece.language) || audio === undefined) return;
     if (piece.words.length === 0) return;
-    this.keep(piece, audio);
+    const full = fullRateOf(piece);
+    this.keep(piece, audio, full);
     if (this.allowed.length === 0) return;
     const spots = piece.words.map((word) => ({
       text: word.text,
@@ -178,7 +197,8 @@ export class Coach {
     const where = { sessionId: piece.sessionId, dict: piece.dict, piece: piece.piece };
     this.run(async () => {
       const judged = await this.judge(audio, asked);
-      if (judged !== null) this.show({ ...where, shown: this.shownOf(judged, spots) }, false);
+      if (judged === null) return;
+      this.show({ ...where, shown: this.shownOf(judged, spots, full !== undefined) }, false);
     });
   }
 
@@ -201,7 +221,7 @@ export class Coach {
         dict,
         piece: correction.piece,
         at,
-        shown: this.shownOf(judged, spots),
+        shown: this.shownOf(judged, spots, piece.full !== undefined),
       };
       this.show(group, true);
     });
@@ -245,7 +265,14 @@ export class Coach {
     }
     try {
       if (action === PLAY_YOURS) {
-        return { audio: await this.voice.yours(piece.audio.slice(hit.from, hit.to)) };
+        const { full } = piece;
+        if (full === undefined) throw new Error("Prifly gave no full-rate audio of that piece");
+        const scale = full.rate / PIECE_RATE;
+        const samples = full.samples.slice(
+          Math.round(hit.from * scale),
+          Math.round(hit.to * scale),
+        );
+        return { audio: await this.voice.yours({ rate: full.rate, samples }) };
       }
       const first = piece.words[0];
       const last = piece.words[piece.words.length - 1];
@@ -255,7 +282,7 @@ export class Coach {
         key: whole ? groupKey(group) : `${groupKey(group)}\n${hit.word}`,
         text: whole ? piece.text : hit.word,
         clip: piece.audio.slice(span.from, span.to),
-        pool: [...(kept?.pieces.values() ?? [])].map((one) => one.audio),
+        pool: [...(kept?.pieces.values() ?? [])].flatMap((one) => (one.full ? [one.full] : [])),
       });
       return { audio };
     } catch (caught) {
@@ -277,7 +304,7 @@ export class Coach {
     while (this.draining !== null) await this.draining;
   }
 
-  private keep(piece: DictationPiece, audio: Float32Array): void {
+  private keep(piece: DictationPiece, audio: Float32Array, full: AudioFull | undefined): void {
     let kept = this.kept.get(piece.sessionId);
     if (kept?.dict !== piece.dict) kept = { dict: piece.dict, pieces: new Map() };
     // Set anew so the session is the newest; the longest silent ones go first.
@@ -287,7 +314,12 @@ export class Coach {
       if (this.kept.size <= KEPT_SESSIONS) break;
       this.kept.delete(old);
     }
-    kept.pieces.set(piece.piece, { text: piece.text, words: piece.words, audio });
+    kept.pieces.set(piece.piece, {
+      text: piece.text,
+      words: piece.words,
+      audio,
+      ...(full === undefined ? {} : { full }),
+    });
     for (const old of kept.pieces.keys()) {
       if (kept.pieces.size <= KEPT_PIECES) break;
       kept.pieces.delete(old);
@@ -295,7 +327,7 @@ export class Coach {
   }
 
   /** `judged` as marks on `spots`, without the pairs the reader accepted and words too long to label. */
-  private shownOf(judged: readonly Judged[], spots: readonly Spot[]): Shown[] {
+  private shownOf(judged: readonly Judged[], spots: readonly Spot[], full: boolean): Shown[] {
     const shown = judged.flatMap((one): Shown[] => {
       const spot = spots[one.index];
       if (spot === undefined || spot.text.length > MAX_LABEL) return [];
@@ -308,7 +340,7 @@ export class Coach {
         detail: detailOf(one),
         actions: [
           { id: NOT_A_MISTAKE, label: "Not a mistake", icon: "check" },
-          ...this.playActions(),
+          ...this.playActions(full),
         ],
         // An older prifly refuses the fields, and draws every mark as sure.
         ...(this.api.features?.includes("dictation-mark-levels") === true
@@ -325,11 +357,14 @@ export class Coach {
     return shown.slice(0, MAX_MARKS);
   }
 
-  /** "Yours" and "Say it right", only where prifly plays what a click answers with; an older prifly gets none. */
-  private playActions(): PlayAction[] {
+  /**
+   * "Yours" and "Say it right", only where prifly plays what a click answers with; an older prifly
+   * gets none. "Yours" only when the piece came with its full-rate audio: the 16 kHz copy is never offered.
+   */
+  private playActions(full: boolean): PlayAction[] {
     if (this.voice === null || this.api.features?.includes(MARK_AUDIO) !== true) return [];
     return [
-      { id: PLAY_YOURS, label: "Yours", kind: "play" },
+      ...(full ? [{ id: PLAY_YOURS, label: "Yours", kind: "play" as const }] : []),
       { id: PLAY_RIGHT, label: "Say it right", kind: "play" },
     ];
   }

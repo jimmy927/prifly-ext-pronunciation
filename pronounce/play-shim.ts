@@ -9,7 +9,17 @@
  * the card plays that file, with a spinner while the promise is pending.
  */
 
-import type { DictationMarkAction, DictationMarkClick } from "@prifly/extension-api";
+import type {
+  DictationMarkAction,
+  DictationMarkClick,
+  DictationPiece,
+} from "@prifly/extension-api";
+
+/** The piece's audio at the device's own rate (extension-api 0.18, feature "dictation-audio-full"). */
+export type AudioFull = { rate: number; samples: Float32Array };
+
+/** A dictation piece as 0.18 hands it over: `audioFull` only when the manifest declares audio and the rate is known. */
+export type FullPiece = DictationPiece & { audioFull?: AudioFull };
 
 /** The `api.features` name prifly adds. Without it, no action carries `kind`. */
 export const MARK_AUDIO = "dictation-mark-audio";

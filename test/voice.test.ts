@@ -4,18 +4,20 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { type Exec, quoted, SeedVcBox, sshArgv } from "../pronounce/box";
 import { Coach, KEPT_SESSIONS, NOT_A_MISTAKE, PLAY_RIGHT, PLAY_YOURS } from "../pronounce/coach";
-import { MARK_AUDIO } from "../pronounce/play-shim";
+import { type AudioFull, type FullPiece, MARK_AUDIO } from "../pronounce/play-shim";
 import {
   MIN_RATE,
   PIECE_RATE,
   type Pipeline,
   READING_RATE,
+  referenceFrom,
   SEED_FLAGS,
   Voice,
 } from "../pronounce/voice";
-import { decodeWav, encodeWav, resampleUp, type Wav } from "../pronounce/wav";
+import { decodeWav, encodeWav, type Wav } from "../pronounce/wav";
 import { fakeDictation, THREE_AS_TREE, threeTrees } from "./fake-dictation";
 
+const FULL_RATE = 48_000;
 const dirs: string[] = [];
 afterEach(async () => {
   for (const dir of dirs.splice(0)) await rm(dir, { recursive: true, force: true });
@@ -58,14 +60,28 @@ function fakePipeline(readRate = READING_RATE, madeRate = 44_100): Fake {
   };
 }
 
-/** A coach over `fakeDictation` that has judged "Three trees." (the first word 100 to 500 ms, silent after, the second 500 to 900 ms silent), hearing play actions when `audio`. */
-async function coached(voice: Voice | null, audio = true) {
+/** A second of the piece at the device's rate, 48 kHz: "Three" (100 to 500 ms) a tone, the rest silent. */
+function fullPiece(rate = 48_000): AudioFull {
+  const samples = new Float32Array(rate);
+  samples.set(tone(0.4, rate), rate / 10);
+  return { rate, samples };
+}
+
+/** `threeTrees` as prifly 0.18 gives it: with `audioFull` unless `full` is null. */
+const withFull = (patch: Partial<FullPiece>, full: AudioFull | null = fullPiece()): FullPiece => ({
+  ...threeTrees(),
+  ...(full === null ? {} : { audioFull: full }),
+  ...patch,
+});
+
+/** A coach over `fakeDictation` that has judged "Three trees." (the first word 100 to 500 ms, silent after, the second 500 to 900 ms silent), hearing play actions when `audio`, the piece with its full-rate audio at `full`'s rate unless null. */
+async function coached(voice: Voice | null, audio = true, full: AudioFull | null = fullPiece()) {
   const fake = fakeDictation();
   if (audio) fake.api.features = [...(fake.api.features ?? []), MARK_AUDIO];
   const coach = new Coach(fake.api, async () => [THREE_AS_TREE], voice);
   const samples = new Float32Array(16_000);
   samples.set(tone(0.4, PIECE_RATE), 1600);
-  coach.piece(threeTrees({ audio: samples }));
+  coach.piece(withFull({ audio: samples }, full));
   await coach.settled();
   const click = (action: string) => ({
     sessionId: "s1",
@@ -85,6 +101,14 @@ test("the play actions are on a mark only where prifly has dictation-mark-audio"
   const dir = await tmp();
   const ids = async (voice: Voice | null, audio: boolean) =>
     (await coached(voice, audio)).fake.marks[0]?.marks[0]?.actions?.map((one) => one.id);
+  const bare = async (full: AudioFull | null) =>
+    (
+      await coached(voiceOver(dir, fakePipeline()), true, full)
+    ).fake.marks[0]?.marks[0]?.actions?.map((one) => one.id);
+  // No full-rate audio, no "Yours": the 16 kHz copy is never offered, and not played up either.
+  expect(await bare(null)).toEqual([NOT_A_MISTAKE, PLAY_RIGHT]);
+  // Audio that is itself at 22.05 kHz or below is no full-rate audio.
+  expect(await bare(fullPiece(22_050))).toEqual([NOT_A_MISTAKE, PLAY_RIGHT]);
   expect(await ids(voiceOver(dir, fakePipeline()), true)).toEqual([
     NOT_A_MISTAKE,
     PLAY_YOURS,
@@ -99,13 +123,13 @@ test("the play actions are on a mark only where prifly has dictation-mark-audio"
   ]);
 });
 
-test("Yours is the word's own span, as a wav at 44.1 kHz", async () => {
+test("Yours is the word's own span of the full-rate audio, at that rate", async () => {
   const { coach, click } = await coached(voiceOver(await tmp(), fakePipeline()));
   const result = await coach.action(click(PLAY_YOURS));
   const wav = decodeWav(await Bun.file((result as { audio: string }).audio).bytes());
-  expect(wav.rate).toBeGreaterThanOrEqual(MIN_RATE);
+  expect(wav.rate).toBe(FULL_RATE);
   // "Three" is 400 ms of tone: 400 ms of the wav, and loud, where "trees" next to it is silent.
-  expect(wav.samples.length).toBe(Math.floor((6400 * MIN_RATE) / PIECE_RATE));
+  expect(wav.samples.length).toBe(0.4 * FULL_RATE);
   const middle = wav.samples.slice(2000, wav.samples.length - 2000);
   expect(Math.max(...middle)).toBeGreaterThan(0.45);
   expect(middle.filter((sample) => Math.abs(sample) < 0.001).length).toBeLessThan(
@@ -126,7 +150,8 @@ test("Say it right reads the sentence at 24 kHz and converts it to the reader's 
   expect(job?.flags).toEqual(SEED_FLAGS);
   expect(job?.flags.join(" ")).toContain("--f0-condition True --auto-f0-adjust True");
   expect(job?.flags.join(" ")).toContain("--diffusion-steps 100 --inference-cfg-rate 0.7");
-  expect(job?.reference.rate).toBeGreaterThanOrEqual(MIN_RATE);
+  // The voice reference is the full-rate piece, not the 16 kHz one.
+  expect(job?.reference.rate).toBe(FULL_RATE);
   const wav = decodeWav(await Bun.file((result as { audio: string }).audio).bytes());
   expect(wav.rate).toBeGreaterThanOrEqual(MIN_RATE);
   expect(wav.samples.length).toBe(Math.round(0.8 * 44_100));
@@ -183,7 +208,7 @@ test("a piece whose audio is no longer kept cannot be played", async () => {
     voiceOver(await tmp(), fakePipeline()),
   );
   for (let at = 0; at <= KEPT_SESSIONS; at += 1) {
-    coach.piece(threeTrees({ sessionId: `s${at}`, audio: tone(1, PIECE_RATE) }));
+    coach.piece(withFull({ sessionId: `s${at}`, audio: tone(1, PIECE_RATE) }));
     await coach.settled();
   }
   const click = (sessionId: string) => ({
@@ -207,7 +232,7 @@ test("a correction's Say it right is the corrected word, as long as the reader's
     async () => [{ ...THREE_AS_TREE, word: "three" }],
     voiceOver(await tmp(), fake),
   );
-  coach.piece(threeTrees({ audio: tone(1, PIECE_RATE) }));
+  coach.piece(withFull({ audio: tone(1, PIECE_RATE) }));
   await coach.settled();
   coach.correction({
     sessionId: "s1",
@@ -296,14 +321,41 @@ test("ssh gets the host, port and key; a quote in an argument cannot end its quo
   expect(quoted("a'b")).toBe(`'a'\\''b'`);
 });
 
-test("wav: written and read back, and only ever resampled up", () => {
+test("wav: written and read back", () => {
   const samples = tone(0.1, PIECE_RATE);
   const back = decodeWav(encodeWav(samples, PIECE_RATE));
   expect(back.rate).toBe(PIECE_RATE);
   expect(back.samples.length).toBe(samples.length);
   expect(back.samples[40]).toBeCloseTo(samples[40] ?? 0, 3);
-  const up = resampleUp(samples, PIECE_RATE, MIN_RATE);
-  expect(up.length).toBe(Math.floor((samples.length * MIN_RATE) / PIECE_RATE));
-  expect(Math.max(...up.slice(500, 1000))).toBeGreaterThan(0.45);
-  expect(() => resampleUp(up, MIN_RATE, PIECE_RATE)).toThrow(/down/);
+});
+
+test("the voice reference is made of full-rate pieces only, at one rate", async () => {
+  const piece = (rate: number, amplitude: number): Wav => ({
+    rate,
+    samples: tone(2, rate, amplitude),
+  });
+  expect(referenceFrom([])).toBeNull();
+  // Nothing at 16 kHz or 22.05 kHz is a reference, however clean.
+  expect(referenceFrom([piece(PIECE_RATE, 0.5), piece(22_050, 0.5)])).toBeNull();
+  const made = referenceFrom([piece(PIECE_RATE, 0.5), piece(22_050, 0.5), piece(48_000, 0.5)]);
+  expect(made?.rate).toBe(48_000);
+  expect(made?.samples.length).toBe(2.5 * 48_000);
+  // Pieces at another rate than the cleanest's are left out.
+  const mixed = referenceFrom([piece(48_000, 0.5), piece(44_100, 0.5)]);
+  expect(mixed?.rate).toBeGreaterThanOrEqual(MIN_RATE);
+  expect(mixed?.samples.length).toBe(Math.round(2.5 * (mixed?.rate ?? 0)));
+});
+
+test("a Voice refuses to hand over audio at a low rate as Yours", async () => {
+  const voice = voiceOver(await tmp(), fakePipeline());
+  await expect(voice.yours({ rate: PIECE_RATE, samples: tone(0.2, PIECE_RATE) })).rejects.toThrow(
+    /below/,
+  );
+});
+
+test("with no full-rate piece kept there is no voice reference, so no Say it right is made", async () => {
+  const fake = fakePipeline();
+  const { coach, click } = await coached(voiceOver(await tmp(), fake), true, null);
+  await expect(coach.action(click(PLAY_RIGHT))).rejects.toThrow(/reference/);
+  expect(fake.converts).toEqual([]);
 });

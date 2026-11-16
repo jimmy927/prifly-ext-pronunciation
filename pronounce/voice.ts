@@ -9,8 +9,9 @@
  * conversion's `--length-adjust` set to the reader's clip length over the
  * reading's, so the clip comes out as long as the reader's own. Everything
  * handed back is 44.1 kHz or more: a reading or a conversion that is not is
- * refused, and the reader's own 16 kHz cut is resampled up (its content stays
- * band-limited to 8 kHz; prifly gives an extension no fuller audio).
+ * refused. "Yours" is cut from the piece's full-rate audio (`audioFull`), never
+ * the 16 kHz copy resampled up, and the voice reference is made of full-rate
+ * pieces only.
  *
  * The models run on a GPU box (`SeedVcBox` in `box.ts`); what the box does is
  * a `Pipeline`, so tests run it over fakes. Clips are cached per piece in
@@ -20,7 +21,7 @@
 import { createHash } from "node:crypto";
 import { mkdir, readFile, rename, stat, writeFile } from "node:fs/promises";
 import { join } from "node:path";
-import { decodeWav, encodeWav, resampleUp, secondsOf, type Wav } from "./wav";
+import { decodeWav, encodeWav, secondsOf, type Wav } from "./wav";
 
 /** The piece audio's rate. */
 export const PIECE_RATE = 16_000;
@@ -78,8 +79,8 @@ export type SayRightJob = {
   text: string;
   /** The reader's own audio of `text`, 16 kHz. */
   clip: Float32Array;
-  /** Other audio of the reader, 16 kHz, for a voice reference when none is set. */
-  pool: readonly Float32Array[];
+  /** Other full-rate audio of the reader, for a voice reference when none is set. */
+  pool: readonly Wav[];
 };
 
 const hashOf = (...parts: (string | Uint8Array)[]): string => {
@@ -92,8 +93,8 @@ const bytesOf = (samples: Float32Array) =>
   new Uint8Array(samples.buffer, samples.byteOffset, samples.byteLength);
 
 /** How loud the speech is over how loud the floor is, dB: the cleanest piece has most. */
-function cleanliness(samples: Float32Array): number {
-  const frame = PIECE_RATE / 50;
+function cleanliness({ samples, rate }: Wav): number {
+  const frame = rate / 50;
   const levels: number[] = [];
   for (let at = 0; at + frame <= samples.length; at += frame) {
     let sum = 0;
@@ -107,27 +108,33 @@ function cleanliness(samples: Float32Array): number {
   return 20 * Math.log10(speech / floor);
 }
 
-/** The reader's cleanest pieces, up to about 20 s and three of them, joined with half a second between. */
-export function referenceFrom(pool: readonly Float32Array[]): Wav | null {
+/**
+ * The reader's cleanest full-rate pieces (44.1 kHz or more, all at the rate of the cleanest), up to
+ * about 20 s and three of them, joined with half a second between; null when there are none.
+ */
+export function referenceFrom(pool: readonly Wav[]): Wav | null {
   const ranked = pool
-    .map((samples) => ({ samples, score: cleanliness(samples) }))
+    .filter((one) => one.rate >= MIN_RATE)
+    .map((one) => ({ ...one, score: cleanliness(one) }))
     .filter((one) => Number.isFinite(one.score))
     .sort((a, b) => b.score - a.score);
+  const rate = ranked[0]?.rate;
+  if (rate === undefined) return null;
   const chosen: Float32Array[] = [];
   let seconds = 0;
-  for (const { samples } of ranked) {
+  for (const one of ranked) {
+    if (one.rate !== rate) continue;
     if (seconds >= REFERENCE_SECONDS || chosen.length >= REFERENCE_PIECES) break;
-    chosen.push(samples, new Float32Array(PIECE_RATE / 2));
-    seconds += samples.length / PIECE_RATE + 0.5;
+    chosen.push(one.samples, new Float32Array(rate / 2));
+    seconds += one.samples.length / rate + 0.5;
   }
-  if (chosen.length === 0) return null;
   const joined = new Float32Array(chosen.reduce((sum, part) => sum + part.length, 0));
   let at = 0;
   for (const part of chosen) {
     joined.set(part, at);
     at += part.length;
   }
-  return { rate: MIN_RATE, samples: resampleUp(joined, PIECE_RATE, MIN_RATE) };
+  return { rate, samples: joined };
 }
 
 export class Voice {
@@ -138,11 +145,17 @@ export class Voice {
     this.deps = deps;
   }
 
-  /** The reader's own audio as a wav at 44.1 kHz; its path. */
-  yours(clip: Float32Array): Promise<string> {
-    const file = join(this.deps.dir, `yours-${hashOf(bytesOf(clip))}.wav`);
+  /** The reader's own full-rate audio as a wav, at its own rate (44.1 kHz or more, else refused); its path. */
+  yours(clip: Wav): Promise<string> {
+    if (clip.rate < MIN_RATE) {
+      return Promise.reject(new Error(`Your audio is at ${clip.rate} Hz, below ${MIN_RATE}`));
+    }
+    const file = join(
+      this.deps.dir,
+      `yours-${hashOf(bytesOf(clip.samples), String(clip.rate))}.wav`,
+    );
     return this.once(file, async () => {
-      await writeWav(file, resampleUp(clip, PIECE_RATE, MIN_RATE), MIN_RATE);
+      await writeWav(file, clip.samples, clip.rate);
     });
   }
 

@@ -1,4 +1,4 @@
-/** Mono wav files: written 16-bit, read as 16-, 24- or 32-bit PCM or 32-bit float, and resampled up. */
+/** Mono wav files: written 16-bit, read as 16-, 24- or 32-bit PCM or 32-bit float. */
 
 export type Wav = { rate: number; samples: Float32Array };
 
@@ -74,27 +74,3 @@ function samplesOf(
 
 /** Seconds of audio. */
 export const secondsOf = (wav: Wav): number => wav.samples.length / wav.rate;
-
-const SINC_HALF_WIDTH = 16;
-
-/** `samples` from `from` Hz up to `to` Hz, by a Hann-windowed sinc; never down. */
-export function resampleUp(samples: Float32Array, from: number, to: number): Float32Array {
-  if (to < from) throw new Error(`Refusing to resample down, ${from} Hz to ${to} Hz`);
-  if (to === from) return samples;
-  const out = new Float32Array(Math.floor((samples.length * to) / from));
-  const step = from / to;
-  for (let i = 0; i < out.length; i += 1) {
-    const centre = i * step;
-    const first = Math.ceil(centre - SINC_HALF_WIDTH);
-    let sum = 0;
-    for (let j = first; j <= centre + SINC_HALF_WIDTH; j += 1) {
-      const sample = samples[j];
-      if (sample === undefined) continue;
-      const x = j - centre;
-      const sinc = x === 0 ? 1 : Math.sin(Math.PI * x) / (Math.PI * x);
-      sum += sample * sinc * (0.5 + 0.5 * Math.cos((Math.PI * x) / (SINC_HALF_WIDTH + 1)));
-    }
-    out[i] = sum;
-  }
-  return out;
-}
