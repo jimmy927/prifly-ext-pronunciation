@@ -1,5 +1,9 @@
 # prifly-ext-pronunciation
 
+![A dictated message in prifly with the word "three" underlined in red and its card open: "You said TREE", "Say THREE", the fix, and the Yours and Say it right buttons](docs/screenshot.png)
+
+_A sent message with two marked words, and the card that opens on one of them (invented sentence)._
+
 A prifly extension that listens to your English dictation and puts a wavy
 underline under words said with a German or Swedish accent feature. With the
 caret in one, the hint under the message box says how to fix it. Pointing at
