@@ -1,0 +1,56 @@
+{
+  "about": "One sentence's vowels and the stress readings both stress.ts (test/stress.test.ts) and tools/calibrate/stats.py (test_calibrate.py) must give for it.",
+  "words": [
+    {
+      "vowels": [{ "durationMs": 60, "rmsDb": -31.5, "f0Hz": 150 }],
+      "stressed": -1,
+      "accepts": []
+    },
+    {
+      "vowels": [
+        { "durationMs": 160, "rmsDb": -18.2, "f0Hz": 210.5 },
+        { "durationMs": 60, "rmsDb": -26, "f0Hz": 172 },
+        { "durationMs": 40, "rmsDb": -30.1, "f0Hz": 160 },
+        { "durationMs": 80, "rmsDb": -29, "f0Hz": 150 }
+      ],
+      "stressed": 1,
+      "accepts": [1]
+    },
+    {
+      "vowels": [
+        { "durationMs": 120, "rmsDb": -20, "f0Hz": 190 },
+        { "durationMs": 100, "rmsDb": -22.4, "f0Hz": null }
+      ],
+      "stressed": 0,
+      "accepts": [0, 1]
+    },
+    {
+      "vowels": [
+        { "durationMs": 100, "rmsDb": -24, "f0Hz": 180 },
+        { "durationMs": 140, "rmsDb": -19, "f0Hz": 200 }
+      ],
+      "stressed": 0,
+      "accepts": [0]
+    },
+    { "vowels": [], "stressed": -1, "accepts": [] }
+  ],
+  "readings": [
+    null,
+    {
+      "combo": "dur+rms+f0",
+      "stressed": 1,
+      "winner": 0,
+      "lead": 1.884711091405,
+      "accepted": false
+    },
+    { "combo": "dur+rms", "stressed": 0, "winner": 1, "lead": -0.470510727564, "accepted": true },
+    {
+      "combo": "dur+rms+f0",
+      "stressed": 0,
+      "winner": 1,
+      "lead": 0.911978436499,
+      "accepted": false
+    },
+    null
+  ]
+}

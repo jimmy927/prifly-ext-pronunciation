@@ -8,7 +8,9 @@
  * (`MIN_HEARD_POSTERIOR`, `SURE_POSTERIOR`).
  *
  * The file: `{ "contrasts": { "z-s": { "maybe": 0.74, "sure": 0.9 }, "th": { "off": true } } }`;
- * other top-level keys (where it came from, when) are ignored here.
+ * other top-level keys (where it came from, when) are ignored here, and so is
+ * the `stress` entry, which `stress.ts` reads: word stress, unlike the
+ * contrasts, is off unless the file turns it on.
  */
 
 import { join } from "node:path";
@@ -37,14 +39,19 @@ const Entry = z.object({
   sure: z.number().min(0).max(1).optional(),
   off: z.boolean().optional(),
 });
-const File = z.object({ contrasts: z.record(z.string(), Entry) });
+const File = z.object({ contrasts: z.record(z.string(), z.unknown()) });
 
-/** The cut-offs of the file's JSON; an id that is no check is left out. Throws on JSON of another shape. */
+/**
+ * The cut-offs of the file's JSON; an id that is no contrast is left out
+ * unread, so the `stress` entry, whose cut-offs are on its own scale, is
+ * `stress.ts`'s. Throws on JSON of another shape.
+ */
 export function parseThresholds(json: unknown): Thresholds {
   const cuts = new Map<ContrastId, Cut>();
-  for (const [id, entry] of Object.entries(File.parse(json).contrasts)) {
+  for (const [id, raw] of Object.entries(File.parse(json).contrasts)) {
     const known = CONTRAST_IDS.find((one) => one === id);
     if (known === undefined) continue;
+    const entry = Entry.parse(raw);
     const maybe = entry.maybe ?? DEFAULT_CUT.maybe;
     cuts.set(known, {
       maybe,

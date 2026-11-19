@@ -2,8 +2,12 @@
 
 labels.jsonl, one utterance per line:
   {"utt": "so-000010011", "corpus": "speechocean762",
-   "words": [{"text": "WE", "accuracy": 10,
+   "words": [{"text": "WE", "accuracy": 10, "stress": 10,
               "phones": [{"canonical": "w", "perceived": null, "score": 2.0}, ...]}]}
+
+`stress` is speechocean762's word stress score (10: right, or one syllable; 5: wrong),
+which stats.py judges word stress flags by; L2-ARCTIC has none, and labels written
+before it was kept have none either.
 
 `canonical` and `perceived` are in the extension's espeak IPA (the same table as
 pronounce/dictionary.ts's ARPABET); `perceived` is null when the raters did not

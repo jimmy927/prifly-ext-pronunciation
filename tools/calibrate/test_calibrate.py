@@ -102,6 +102,8 @@ class Labels(unittest.TestCase):
         phones = fetch.speechocean_labels("so-1", entry)["words"][0]["phones"]
         self.assertEqual(phones[1], {"canonical": "z", "perceived": "s", "score": 0.4})
         self.assertIsNone(phones[0]["perceived"])
+        entry["words"][0]["stress"] = 5
+        self.assertEqual(fetch.speechocean_labels("so-1", entry)["words"][0]["stress"], 5)
 
     def test_vctk_speakers(self):
         info = "ID  AGE  GENDER  ACCENTS  REGION COMMENTS\np225  23  F    English    Southern  England\np226 22 M American Ohio\n"
@@ -140,6 +142,72 @@ class Stats(unittest.TestCase):
             self.assertFalse(cuts["z-s"]["off"])
             self.assertTrue(cuts["th"]["off"])
             self.assertIn("| z-s |", (root / "report.md").read_text())
+
+
+FIXTURE = Path(__file__).resolve().parents[2] / "test" / "fixtures" / "stress-sentence.json"
+
+
+def vowel(ms, db, hz, at=0, stressed=False):
+    return {"at": at, "phone": "ə", "stressed": stressed, "durationMs": ms, "rmsDb": db, "f0Hz": hz}
+
+
+def stress_utterance(utt, reversed_stress):
+    """A filler word of three vowels and a two-vowel content word stressed on its first; `reversed_stress`: said on its second."""
+    strong, weak = (160, -18, 210), (60, -27, 170)
+    first, second = (weak, strong) if reversed_stress else (strong, weak)
+    filler = {**word(0, "of", None, [], judged=False), "utt": utt, "vowels": [vowel(70, -26, 160), vowel(80, -25, 165), vowel(60, -28, 150)]}
+    content = {**word(1, "table", "t eɪ b ə l", []), "utt": utt, "stressVowel": 0, "stressAccepts": [0]}
+    content["vowels"] = [vowel(*first, at=1, stressed=True), vowel(*second, at=3)]
+    return [filler, content]
+
+
+class Stress(unittest.TestCase):
+    def test_readings_match_stress_ts(self):
+        fixture = json.loads(FIXTURE.read_text(encoding="utf-8"))
+        readings = stats.stress_readings(fixture["words"])
+        self.assertEqual(len(readings), len(fixture["readings"]))
+        for got, want in zip(readings, fixture["readings"]):
+            if want is None:
+                self.assertIsNone(got)
+                continue
+            self.assertEqual({k: got[k] for k in ("combo", "stressed", "winner", "accepted")}, {k: want[k] for k in ("combo", "stressed", "winner", "accepted")})
+            self.assertAlmostEqual(got["lead"], want["lead"], places=6)
+
+    def run_stats(self, learner_stress):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "dump").mkdir()
+            (root / "corpora" / "speechocean762").mkdir(parents=True)
+            # 2400 native words read, 5 said the other way round: at most 12 may be marked at maybe, 2 at sure.
+            native = [r for n in range(2400) for r in stress_utterance(f"n{n}", n < 5)]
+            (root / "dump" / "librispeech.0.jsonl").write_text("\n".join(json.dumps(r) for r in native) + "\n")
+            learners, labels = [], []
+            for n in range(30):
+                learners += stress_utterance(f"so-{n}", True)
+                score = (5 if n < 27 else 10) if learner_stress else None
+                labels.append({"utt": f"so-{n}", "words": [{"text": "of", "phones": []}, {"text": "table", "stress": score, "phones": []}]})
+            (root / "dump" / "speechocean762.0.jsonl").write_text("\n".join(json.dumps(r) for r in learners) + "\n")
+            (root / "corpora" / "speechocean762" / "labels.jsonl").write_text("\n".join(json.dumps(r) for r in labels) + "\n")
+            stats.main(["--dump", str(root / "dump"), "--corpora", str(root / "corpora"), "--out", str(root / "out"), "--report", str(root / "report.md")])
+            cuts = json.loads((root / "out" / "thresholds.json").read_text())["contrasts"]
+            natives = json.loads((root / "out" / "native-stats.json").read_text())["stress"]["lead"]
+            return cuts["stress"], natives, (root / "report.md").read_text(encoding="utf-8")
+
+    def test_stress_ships_on_learner_stress_scores(self):
+        entry, natives, report = self.run_stats(learner_stress=True)
+        self.assertFalse(entry["off"])
+        cut = entry["cuts"]["dur+rms+f0"]
+        self.assertGreater(cut["maybe"], 0)
+        self.assertGreaterEqual(cut["sure"], cut["maybe"])
+        self.assertEqual(natives["dur+rms+f0"]["n"], 2400)
+        self.assertIn("p99.5", natives["dur+rms+f0"])
+        self.assertIn("## Word stress", report)
+
+    def test_stress_is_off_without_learner_stress_scores(self):
+        entry, _, report = self.run_stats(learner_stress=False)
+        self.assertTrue(entry["off"])
+        self.assertIn("no learner stress labels", entry["why"])
+        self.assertIn("Ships: off", report)
 
 
 if __name__ == "__main__":
