@@ -26,10 +26,11 @@ type Asked = { audio: Float32Array; words: readonly JudgeWord[] };
 
 function made(answer: (asked: Asked) => Promise<Judged[] | null>, fake = fakeDictation()) {
   const asked: Asked[] = [];
-  const coach = new Coach(fake.api, (audio, words) => {
+  const coach = new Coach(fake.api, async (audio, words) => {
     const one = { audio, words };
     asked.push(one);
-    return answer(one);
+    const marks = await answer(one);
+    return marks === null ? null : { marks, scores: [] };
   });
   return { coach, asked, fake };
 }

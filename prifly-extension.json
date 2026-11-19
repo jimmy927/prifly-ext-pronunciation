@@ -5,6 +5,16 @@
   "version": "0.3.0",
   "main": "index.ts",
   "dictation": { "audio": true },
+  "panels": [
+    {
+      "id": "accent",
+      "label": "Your accent",
+      "icon": "activity",
+      "description": "The few sounds that set your English furthest from native speakers, measured over all your dictation, with your own examples to play",
+      "folder": "panel",
+      "page": "index.html"
+    }
+  ],
   "settings": [
     {
       "id": "underline",

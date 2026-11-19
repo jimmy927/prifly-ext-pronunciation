@@ -5,6 +5,9 @@
  * the reader corrected by hand judged again against the corrected word and
  * marked from where it stands in the box (`at`); and "Not a mistake" kept
  * in `api.state`, that word with what was heard in it never marked again.
+ * A judged piece's content words also go into the accent profile
+ * (`profile.ts`), and a vowel pattern it has confirmed adds its own marks
+ * (`confirmed.ts`) to words no other check marked.
  *
  * Dictation never waits on any of it: a handler keeps what it needs and
  * returns, and the judging runs after, one request at a time. While one
@@ -24,6 +27,7 @@ import type {
   ExtensionApi,
   SettingValues,
 } from "@prifly/extension-api";
+import { confirmedMarks } from "./confirmed";
 import { wordKey } from "./dictionary";
 import { type Judged, type JudgeWord, levelOf } from "./judge";
 import { isNotMistake, type NotMistake, StoredNotMistakes, withNotMistake } from "./not-mistakes";
@@ -34,6 +38,8 @@ import {
   type PlayAction,
   type PlayResult,
 } from "./play-shim";
+import type { AccentProfile, PieceAt } from "./profile";
+import type { Judgement } from "./scores";
 import { MIN_RATE, PIECE_RATE, type Voice } from "./voice";
 
 /** The id of the mark's own action; the window adds Listen itself. */
@@ -77,7 +83,14 @@ const SAMPLES_PER_MS = 16;
 export type JudgeFn = (
   audio: Float32Array,
   words: readonly JudgeWord[],
-) => Promise<Judged[] | null>;
+) => Promise<Judgement | null>;
+
+/** What the reader hears for an example of the accent profile: their own word, or it said right. */
+export type ExampleAudio = PieceAt & { word: string; from: number; to: number };
+
+/** Why "Yours" cannot play: the piece's audio went with its dictation, or came without its full rate. */
+export const AUDIO_GONE = "That audio is no longer kept: only the last dictation of a session is";
+export const NO_FULL_RATE = "Prifly gave no full-rate audio of that piece";
 
 type CoachApi = Pick<
   ExtensionApi,
@@ -140,6 +153,7 @@ export class Coach {
   private readonly api: CoachApi;
   private readonly judge: JudgeFn;
   private readonly voice: Pick<Voice, "yours" | "sayRight"> | null;
+  private readonly profile: AccentProfile | null;
   private notMistakes: NotMistake[] = [];
   /** Each session's last dictation: its id, and its pieces by number. */
   private readonly kept = new Map<string, { dict: string; pieces: Map<number, KeptPiece> }>();
@@ -154,10 +168,12 @@ export class Coach {
     api: CoachApi,
     judge: JudgeFn,
     voice: Pick<Voice, "yours" | "sayRight"> | null = null,
+    profile: AccentProfile | null = null,
   ) {
     this.api = api;
     this.judge = judge;
     this.voice = voice;
+    this.profile = profile;
     this.allowed = allowedLevels(api.settings?.[UNDERLINE]);
     api.onSettings?.((values) => this.settingsChanged(values));
   }
@@ -198,8 +214,36 @@ export class Coach {
     this.run(async () => {
       const judged = await this.judge(audio, asked);
       if (judged === null) return;
-      this.show({ ...where, shown: this.shownOf(judged, spots, full !== undefined) }, false);
+      const marks = [...judged.marks, ...this.patternMarks(judged, spots)];
+      this.show({ ...where, shown: this.shownOf(marks, spots, full !== undefined) }, false);
+      await this.learn(judged, spots, where);
     });
+  }
+
+  /** The piece's content words' scores added to the accent profile; a refused write is logged. */
+  private async learn(judged: Judgement, spots: readonly Spot[], where: PieceAt): Promise<void> {
+    const words = judged.scores.flatMap((scores) => {
+      const spot = spots[scores.index];
+      return spot === undefined ? [] : [{ scores, word: spot.text, from: spot.from, to: spot.to }];
+    });
+    try {
+      await this.profile?.add(words, where);
+    } catch (caught) {
+      if (!(caught instanceof Error)) throw caught;
+      this.api.log("profileFailed", { error: caught.message });
+    }
+  }
+
+  /** The words underlined from a vowel pattern the profile has confirmed (`confirmed.ts`), where no other check marked them. */
+  private patternMarks(judged: Judgement, spots: readonly Spot[]): Judged[] {
+    if (this.profile === null) return [];
+    return confirmedMarks(
+      judged.scores,
+      spots.map((spot) => spot.text),
+      this.profile.assessed(),
+      this.profile.nativeStats(),
+      new Set(judged.marks.map((one) => one.index)),
+    );
   }
 
   /** A dictated word the reader replaced: judged again as the word now in the box, marked from its place there. */
@@ -214,14 +258,14 @@ export class Coach {
     const spots = [{ text: word, start: 0, end: word.length, ...samplesOf(said) }];
     this.run(async () => {
       const judged = await this.judge(piece.audio, asked);
-      this.api.log("recheck", { heard: correction.heard, word, marks: judged?.length ?? -1 });
+      this.api.log("recheck", { heard: correction.heard, word, marks: judged?.marks.length ?? -1 });
       if (judged === null) return;
       const group = {
         sessionId,
         dict,
         piece: correction.piece,
         at,
-        shown: this.shownOf(judged, spots, piece.full !== undefined),
+        shown: this.shownOf(judged.marks, spots, piece.full !== undefined),
       };
       this.show(group, true);
     });
@@ -259,21 +303,12 @@ export class Coach {
   /** The audio of a play action: the reader's own word, or the sentence (the word, for a correction) said right in their voice. */
   private async play(action: string, group: Group, hit: Shown): Promise<PlayResult> {
     const kept = this.kept.get(group.sessionId);
-    const piece = kept?.dict === group.dict ? kept.pieces.get(group.piece) : undefined;
+    const piece = this.keptPiece(group);
     if (this.voice === null || piece === undefined || hit.to <= hit.from) {
-      throw new Error("That audio is no longer kept: only the last dictation of a session is");
+      throw new Error(AUDIO_GONE);
     }
     try {
-      if (action === PLAY_YOURS) {
-        const { full } = piece;
-        if (full === undefined) throw new Error("Prifly gave no full-rate audio of that piece");
-        const scale = full.rate / PIECE_RATE;
-        const samples = full.samples.slice(
-          Math.round(hit.from * scale),
-          Math.round(hit.to * scale),
-        );
-        return { audio: await this.voice.yours({ rate: full.rate, samples }) };
-      }
+      if (action === PLAY_YOURS) return { audio: await this.yoursOf(this.voice, piece, hit) };
       const first = piece.words[0];
       const last = piece.words[piece.words.length - 1];
       const whole = group.at === undefined && first !== undefined && last !== undefined;
@@ -289,6 +324,62 @@ export class Coach {
       if (caught instanceof Error) this.api.log("playFailed", { action, error: caught.message });
       throw caught;
     }
+  }
+
+  /** The piece at `where` while its dictation is still the session's kept one. */
+  private keptPiece(where: PieceAt): KeptPiece | undefined {
+    const kept = this.kept.get(where.sessionId);
+    return kept?.dict === where.dict ? kept.pieces.get(where.piece) : undefined;
+  }
+
+  /** The reader's own samples `from` to `to` of `piece`, cut from its full-rate audio. */
+  private yoursOf(
+    voice: Pick<Voice, "yours">,
+    piece: KeptPiece,
+    span: { from: number; to: number },
+  ): Promise<string> {
+    const { full } = piece;
+    if (full === undefined) return Promise.reject(new Error(NO_FULL_RATE));
+    const scale = full.rate / PIECE_RATE;
+    const samples = full.samples.slice(Math.round(span.from * scale), Math.round(span.to * scale));
+    return voice.yours({ rate: full.rate, samples });
+  }
+
+  /** Why an example of the profile cannot play "Yours" now; null when it can. */
+  yoursMissing(example: ExampleAudio): string | null {
+    const piece = this.keptPiece(example);
+    if (this.voice === null || piece === undefined || example.to <= example.from) return AUDIO_GONE;
+    return piece.full === undefined ? NO_FULL_RATE : null;
+  }
+
+  /** The file of an example's own word, as "Yours" on a card plays it. */
+  exampleYours(example: ExampleAudio): Promise<string> {
+    const piece = this.keptPiece(example);
+    const why = this.yoursMissing(example);
+    if (why !== null || piece === undefined || this.voice === null) {
+      return Promise.reject(new Error(why ?? AUDIO_GONE));
+    }
+    return this.yoursOf(this.voice, piece, example);
+  }
+
+  /**
+   * An example's word said right in the reader's voice, as a correction's "Say it right" says
+   * one word. Seed-VC only takes the length of the reader's clip, so an example whose audio has
+   * gone still plays, from silence of the same length; the voice comes from the reference or
+   * any session's kept full-rate pieces.
+   */
+  exampleRight(example: ExampleAudio): Promise<string> {
+    if (this.voice === null) return Promise.reject(new Error(AUDIO_GONE));
+    const piece = this.keptPiece(example);
+    const length = Math.max(0, example.to - example.from);
+    return this.voice.sayRight({
+      key: `example\n${groupKey(example)}\n${example.from}`,
+      text: example.word,
+      clip: piece?.audio.slice(example.from, example.to) ?? new Float32Array(length),
+      pool: [...this.kept.values()].flatMap((one) =>
+        [...one.pieces.values()].flatMap((kept) => (kept.full ? [kept.full] : [])),
+      ),
+    });
   }
 
   /** Nothing more is judged or marked; what is kept goes. */

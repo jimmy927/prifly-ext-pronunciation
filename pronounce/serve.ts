@@ -13,6 +13,7 @@ import { judgeWords, type Vocab, vocabFrom } from "./judge";
 import { exitWhenOrphaned } from "./lifetime";
 import { decodeFloats } from "./pcm";
 import { JudgeRequest, type PronounceArgs, type PronounceLine } from "./protocol";
+import { scorePiece } from "./scores";
 import { loadThresholds, type Thresholds } from "./thresholds";
 
 /** What the worker needs of the model: logits per frame for normalised 16 kHz audio. */
@@ -56,7 +57,7 @@ export async function loadAll(
   return { model, vocab: vocabFrom(json), dictionary, thresholds };
 }
 
-/** One request's marks, or its failure as an `error` line for its id. */
+/** One request's marks and the accent profile's scores (`scores.ts`), or its failure as an `error` line for its id. */
 export async function answerJudge(request: JudgeRequest, loaded: Loaded): Promise<PronounceLine> {
   const started = performance.now();
   try {
@@ -69,7 +70,8 @@ export async function answerJudge(request: JudgeRequest, loaded: Loaded): Promis
       request.words,
       loaded.thresholds,
     );
-    return { type: "marks", id: request.id, marks, ms: performance.now() - started };
+    const scores = scorePiece(post, loaded.vocab, loaded.dictionary, request.words);
+    return { type: "marks", id: request.id, marks, scores, ms: performance.now() - started };
   } catch (caught) {
     return { type: "error", id: request.id, message: String(caught) };
   }

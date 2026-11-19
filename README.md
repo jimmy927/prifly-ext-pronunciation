@@ -92,6 +92,25 @@ These rules come from a benchmark on 13 Speech Accent Archive speakers (5
 German, 5 Swedish, 3 native English), where every other kind of edit was as
 common in natives as in learners. Do not retune them without rerunning it.
 
+## Your accent
+
+Vowels cannot be judged one word at a time, so they are measured over all your
+dictation instead. After each judged piece the goodness of every content word's
+vowels and checked consonants (`pronounce/scores.ts`) goes into a profile kept
+in prifly's state on this machine (`pronounce/profile.ts`: the last 30 days, at
+most 150 scores per sound). Once a sound has 40 examples and your median sits
+below native speakers' 10th percentile (`pronounce/data/native-stats.json`, from
+`tools/calibrate`), it is confirmed. The "Your accent" button in the status bar
+(`panel/`) shows the three confirmed sounds furthest from native, the words they
+were heard in, and Yours and Say it right for one of them.
+
+A confirmed vowel also comes back as an underline (`pronounce/confirmed.ts`): a
+later word with that vowel is marked when its vowel sits below the natives' 0.5th
+percentile (at most 1 native word in 200) and sounds like the pattern's (the A
+in "cap" for the U in "cup"); "sure" only beyond 1 in 2000. Without
+`native-stats.json` the profile only collects: the panel says so, and nothing is
+underlined from it.
+
 ## What it downloads
 
 On first enable, into `<prifly data>/models/` (no account or key needed):
@@ -237,7 +256,7 @@ memory and 4 cores, so run it deliberately, on a machine with room:
 | File                                                                                                        | What it is                                                          |
 | ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
 | `prifly-extension.json`                                                                                     | The manifest, with `"dictation": { "audio": true }`                 |
-| `index.ts`                                                                                                  | `activate`: the extension with its real dependencies                |
+| `index.ts`                                                                                                  | `activate`: the extension with its real dependencies; `panel`       |
 | `pronounce/extension.ts`                                                                                    | Puts the runner and the coach together on the api                   |
 | `pronounce/coach.ts`                                                                                        | Dictation handlers, marks, "Not a mistake", the busy rule           |
 | `pronounce/voice.ts`, `box.ts`, `box/runner.py`, `wav.ts`, `play-shim.ts`                                   | Yours and Say it right: the clips, the GPU box, the box's script    |
@@ -247,5 +266,7 @@ memory and 4 cores, so run it deliberately, on a machine with room:
 | `pronounce/worker-pipe.ts`, `calls.ts`, `protocol.ts`, `pcm.ts`                                             | How the extension and the worker talk                               |
 | `pronounce/judge.ts`, `contrasts.ts`, `align.ts`, `ctc.ts`, `phones.ts`, `dictionary.ts`, `not-mistakes.ts` | The judging                                                         |
 | `pronounce/force-align.ts`, `thresholds.ts`, `gop.ts`, `pitch.ts`                                           | Sentence alignment, the checks' cut-offs, phone goodness and pitch  |
+| `pronounce/scores.ts`, `profile.ts`, `native.ts`, `confirmed.ts`, `accent-words.ts`                         | The accent profile and its confirmed-pattern underlines             |
+| `pronounce/accent-panel.ts`, `panel/`                                                                       | The "Your accent" window: its data and its page                     |
 | `tools/calibrate/`                                                                                          | Measures natives and learners on a rented box (its `README.md`)     |
 | `test/`                                                                                                     | Tests over fakes                                                    |

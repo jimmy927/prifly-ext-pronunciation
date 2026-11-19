@@ -34,7 +34,8 @@ from labels import ERROR_SCORE, is_error
 NATIVE = {"librispeech", "vctk"}
 LEARNER = {"speechocean762", "l2arctic"}
 CHECKS = ["z-s", "final-devoicing", "th", "w-v", "sh-ch"]
-PERCENTILES = [1, 5, 10, 25, 50, 75, 90, 95, 99]
+# 0.5: the confirmed-pattern underlines' cut-off (pronounce/confirmed.ts), at most 1 native word in 200.
+PERCENTILES = [0.5, 1, 5, 10, 25, 50, 75, 90, 95, 99]
 # The cut-offs tried, 0.500 to 0.995: below a half the heard phone was barely the likeliest at all.
 GRID = [round(0.50 + 0.005 * step, 3) for step in range(100)]
 TODAY = 0.70

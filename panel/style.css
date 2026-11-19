@@ -1,0 +1,190 @@
+/* Light and dark follow the system until the window says which (`?theme=`, `prifly-look`
+   in app.js, whose tokens then override these). */
+:root {
+  color-scheme: light;
+  --bg: #ffffff;
+  --fg: #16181d;
+  --card: #ffffff;
+  --muted: #f3f4f6;
+  --muted-fg: #6b7280;
+  --border: #e3e5e9;
+  --accent: #eef0f3;
+  --primary: #2a78d6;
+  --primary-fg: #ffffff;
+  --far: #d95926;
+  --error: #c0362c;
+  --font: system-ui, -apple-system, "Segoe UI", sans-serif;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    color-scheme: dark;
+    --bg: #111317;
+    --fg: #eceef2;
+    --card: #16191e;
+    --muted: #1d2127;
+    --muted-fg: #9097a2;
+    --border: #2a2f37;
+    --accent: #222730;
+    --primary: #3987e5;
+    --far: #eb6834;
+    --error: #f06a5f;
+  }
+}
+:root[data-theme="dark"] {
+  color-scheme: dark;
+  --bg: #111317;
+  --fg: #eceef2;
+  --card: #16191e;
+  --muted: #1d2127;
+  --muted-fg: #9097a2;
+  --border: #2a2f37;
+  --accent: #222730;
+  --primary: #3987e5;
+  --far: #eb6834;
+  --error: #f06a5f;
+}
+
+* {
+  box-sizing: border-box;
+}
+html,
+body {
+  margin: 0;
+}
+body {
+  background: var(--bg);
+  color: var(--fg);
+  font: 13px / 1.45 var(--font);
+}
+.app {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  padding: 16px 20px 24px;
+  max-width: 880px;
+  margin: 0 auto;
+}
+.bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+h1 {
+  flex: 1;
+  font-size: 16px;
+  font-weight: 600;
+  margin: 0;
+}
+h2 {
+  font-size: 14px;
+  font-weight: 600;
+  margin: 0;
+}
+p {
+  margin: 0;
+}
+.note,
+.state,
+.collecting {
+  color: var(--muted-fg);
+}
+.state {
+  padding: 24px 0;
+}
+.error {
+  color: var(--error);
+}
+.features {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  list-style: none;
+  margin: 0;
+  padding: 0;
+}
+.feature {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 4px 12px;
+  padding: 12px 14px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+}
+.rank {
+  grid-row: span 4;
+  width: 22px;
+  height: 22px;
+  border-radius: 50%;
+  background: var(--accent);
+  color: var(--muted-fg);
+  font-weight: 600;
+  display: grid;
+  place-items: center;
+}
+.distance {
+  color: var(--far);
+}
+.heard {
+  color: var(--muted-fg);
+}
+.plays {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 6px;
+}
+.btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: inherit;
+  color: var(--fg);
+  background: var(--muted);
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  padding: 4px 10px;
+  cursor: pointer;
+}
+.btn:hover:not(:disabled) {
+  background: var(--accent);
+}
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+.btn.quiet {
+  background: transparent;
+}
+.btn svg {
+  width: 14px;
+  height: 14px;
+  fill: none;
+  stroke: currentColor;
+  stroke-width: 1.5;
+  stroke-linecap: round;
+  stroke-linejoin: round;
+}
+.btn .spin {
+  display: none;
+}
+.btn[aria-busy="true"] .spin {
+  display: inline;
+  animation: turn 0.9s linear infinite;
+}
+.btn[aria-busy="true"] .icon {
+  display: none;
+}
+@keyframes turn {
+  to {
+    transform: rotate(360deg);
+  }
+}
+.play-error {
+  grid-column: 2;
+  color: var(--error);
+}
+.collecting b {
+  color: var(--fg);
+  font-weight: 600;
+}

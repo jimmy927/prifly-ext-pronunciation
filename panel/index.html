@@ -1,0 +1,37 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Your accent</title>
+    <link rel="stylesheet" href="style.css" />
+    <script>
+      // Before the first paint: the window says light or dark in the query; without it the system's.
+      {
+        const theme = new URLSearchParams(location.search).get("theme");
+        if (theme === "dark" || theme === "light") document.documentElement.dataset.theme = theme;
+      }
+    </script>
+  </head>
+  <body>
+    <main class="app">
+      <header class="bar">
+        <h1 id="heading">Your accent</h1>
+        <button type="button" class="btn quiet" id="refresh" title="Read your profile again">
+          <svg viewBox="0 0 16 16" aria-hidden="true">
+            <path d="M13.5 8a5.5 5.5 0 1 1-1.6-3.9M13.5 2.5v3h-3" />
+          </svg>
+          Refresh
+        </button>
+      </header>
+      <p class="note" id="note">
+        Measured over many sentences, not word by word: one word can sound off by chance, a
+        pattern over many cannot.
+      </p>
+      <div id="body" aria-live="polite">
+        <p class="state" id="loading">Reading your profile…</p>
+      </div>
+    </main>
+    <script type="module" src="app.js"></script>
+  </body>
+</html>

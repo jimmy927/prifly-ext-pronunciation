@@ -2,11 +2,13 @@
  * What the extension and its pronunciation worker (`worker.ts`) say to each
  * other, one JSON object per line: the extension sends a piece's audio with the
  * words to check and where each was said, and the worker answers with the
- * words said otherwise (`judge.ts`). The worker says `ready` once the model
- * and the dictionary are loaded.
+ * words said otherwise (`judge.ts`) and the content words' scores for the
+ * accent profile (`scores.ts`). The worker says `ready` once the model and
+ * the dictionary are loaded.
  */
 
 import { z } from "zod";
+import { CONTRAST_IDS } from "./contrasts";
 
 /** `pcm`: the piece's 16 kHz mono float32 samples, little-endian, base64; each word's samples in it. */
 export const JudgeRequest = z.strictObject({
@@ -38,6 +40,24 @@ export const Judged = z.strictObject({
   fix: z.string(),
 });
 
+/** A content word's scores for the accent profile (`scores.ts`). */
+export const WordScores = z.strictObject({
+  index: z.number().int().min(0),
+  phones: z.array(z.string()),
+  stress: z.number().int(),
+  vowels: z.array(
+    z.strictObject({ at: z.number().int(), phone: z.string(), lpr: z.number(), rival: z.string() }),
+  ),
+  contrasts: z.array(
+    z.strictObject({
+      id: z.enum(CONTRAST_IDS),
+      at: z.number().int(),
+      phone: z.string(),
+      lpr: z.number(),
+    }),
+  ),
+});
+
 export const PronounceLine = z.discriminatedUnion("type", [
   /** The model and the dictionary are loaded, and the model has run once. */
   z.strictObject({ type: z.literal("ready") }),
@@ -45,6 +65,8 @@ export const PronounceLine = z.discriminatedUnion("type", [
     type: z.literal("marks"),
     id: z.string(),
     marks: z.array(Judged),
+    /** The piece's content words scored for the accent profile. */
+    scores: z.array(WordScores).default([]),
     ms: z.number(),
   }),
   z.strictObject({ type: z.literal("error"), id: z.string(), message: z.string() }),

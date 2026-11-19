@@ -1,7 +1,9 @@
 /**
  * The extension put together: on enable the runner fetches the model and
  * the dictionary and starts the worker, its state on the status line; the
- * coach hears dictation and marks words; on disable the worker and any
+ * coach hears dictation and marks words, and adds each judged piece to the
+ * accent profile, which the "Your accent" window shows (`accent-panel.ts`);
+ * on disable the worker and any
  * download on its way are stopped. What fetches and what starts the worker
  * are handed in (`StartDeps`), so tests run it over fakes; `index.ts` hands
  * in the real ones.
@@ -10,10 +12,13 @@
 import { homedir } from "node:os";
 import { join } from "node:path";
 import type { ExtensionApi } from "@prifly/extension-api";
+import { AccentPanel } from "./accent-panel";
 import { SeedVcBox } from "./box";
 import { Coach } from "./coach";
 import { ensurePronounce, priflyDataDir } from "./models";
+import { loadNativeStats, type NativeStats } from "./native";
 import type { OnMarkAction } from "./play-shim";
+import { AccentProfile } from "./profile";
 import { PronounceRunner, type RunnerDeps } from "./runner";
 import { statusLine } from "./status";
 import { readReference, Voice } from "./voice";
@@ -22,6 +27,10 @@ import { spawnPronounce } from "./worker-pipe";
 export type StartDeps = Pick<RunnerDeps, "ensure" | "spawn" | "backoffMs"> & {
   /** The two play buttons' audio; left out, a mark has none. */
   voice?: Voice;
+  /** The natives' statistics (`native.ts`); left out, `NATIVE_STATS_PATH` is read. */
+  natives?: () => Promise<NativeStats | null>;
+  /** Clock for the accent profile; tests set it. */
+  now?: () => number;
 };
 
 /** What the extension needs of prifly: the dictation api, 0.16 and later. */
@@ -40,26 +49,51 @@ export const NO_BOX =
 /** Said on the status line when prifly is too old to pass dictation to an extension. */
 export const TOO_OLD = "Needs a newer prifly: this one does not pass dictation to extensions";
 
-export type Started = { stop: () => void; runner: PronounceRunner | null; coach: Coach | null };
+export type Started = {
+  stop: () => void;
+  runner: PronounceRunner | null;
+  coach: Coach | null;
+  /** The "Your accent" window's data; null when prifly is too old to dictate to the extension. */
+  panel: AccentPanel | null;
+};
 
 /** The extension running on `api` with `deps`. */
 export function start(api: ExtensionApi, deps: StartDeps): Started {
   const features = api.features ?? [];
   if (!NEEDED.every((name) => features.includes(name)) || api.onDictationPiece === undefined) {
     api.status?.(TOO_OLD);
-    return { stop: () => undefined, runner: null, coach: null };
+    return { stop: () => undefined, runner: null, coach: null, panel: null };
   }
   const runner: PronounceRunner = new PronounceRunner({
     ...deps,
     onChange: () => api.status?.(statusLine(runner)),
     log: (event, fields) => api.log(event, fields),
   });
-  const coach = new Coach(api, (audio, words) => runner.judge(audio, words), deps.voice ?? null);
+  let natives: NativeStats | null = null;
+  const profile = new AccentProfile(api.state, () => natives, deps.now);
+  const coach = new Coach(
+    api,
+    (audio, words) => runner.judge(audio, words),
+    deps.voice ?? null,
+    profile,
+  );
+  const panel = new AccentPanel({
+    profile,
+    coach,
+    sayRight: () => (String(api.settings?.[VOICE_BOX] ?? "").trim() === "" ? NO_BOX : null),
+  });
   api.onDictationPiece((piece) => coach.piece(piece));
   api.onDictationCorrection?.((correction) => coach.correction(correction));
   // With "dictation-mark-audio" prifly plays what a click's handler resolves to.
   (api.onDictationMarkAction as OnMarkAction | undefined)?.((click) => coach.action(click));
   void coach.load();
+  void profile.load();
+  const readNatives =
+    deps.natives ??
+    (() => loadNativeStats(undefined, (why) => api.log("nativeStatsIgnored", { why })));
+  void readNatives().then((stats) => {
+    natives = stats;
+  });
   void runner.start();
   api.log("activated", {});
   return {
@@ -69,6 +103,7 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
     },
     runner,
     coach,
+    panel,
   };
 }
 

@@ -11,10 +11,11 @@
 
 import { MAX_FAILURES, PendingCalls, readLine, restartWait } from "./calls";
 import { ShaMismatch } from "./download";
-import type { Judged, JudgeWord } from "./judge";
+import type { JudgeWord } from "./judge";
 import type { Fetching, PronounceFiles } from "./models";
 import { encodeFloats } from "./pcm";
 import { type PronounceArgs, PronounceLine } from "./protocol";
+import type { Judgement } from "./scores";
 import type { WorkerPipe } from "./worker-pipe";
 
 /**
@@ -57,7 +58,7 @@ export class PronounceRunner {
   /** Why it is `failed`; "" otherwise. */
   error = "";
   private pipe: WorkerPipe | null = null;
-  private readonly calls = new PendingCalls<Judged[]>();
+  private readonly calls = new PendingCalls<Judgement>();
   private generation = 0;
   private failures = 0;
   private unavailable: string | null = null;
@@ -131,7 +132,7 @@ export class PronounceRunner {
       this.set("ready");
     } else if (msg.type === "marks") {
       this.deps.log("judged", { ms: Math.round(msg.ms), marks: msg.marks.length });
-      this.calls.answer(msg.id, msg.marks);
+      this.calls.answer(msg.id, { marks: msg.marks, scores: msg.scores });
     } else if (msg.type === "unavailable") {
       this.unavailable = msg.message;
     } else {
@@ -177,8 +178,8 @@ export class PronounceRunner {
     this.set("off");
   }
 
-  /** The words of `audio` said otherwise; null while the worker is not ready, or when it could not say. */
-  judge(audio: Float32Array, words: readonly JudgeWord[]): Promise<Judged[] | null> {
+  /** The words of `audio` said otherwise, and its content words' scores; null while the worker is not ready, or when it could not say. */
+  judge(audio: Float32Array, words: readonly JudgeWord[]): Promise<Judgement | null> {
     const { pipe } = this;
     if (this.state !== "ready" || pipe === null || words.length === 0) return Promise.resolve(null);
     // Only what the worker's strict request takes.

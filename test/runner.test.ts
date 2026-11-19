@@ -89,7 +89,7 @@ test("a piece goes to the worker with only its words' text and time, and its mar
     fix: "",
   };
   worker?.say({ type: "marks", id: request.id, marks: [judged], ms: 12 });
-  expect(await marks).toEqual([judged]);
+  expect(await marks).toEqual({ marks: [judged], scores: [] });
 });
 
 test("nothing is judged before the worker is ready", async () => {

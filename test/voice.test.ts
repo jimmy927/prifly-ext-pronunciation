@@ -78,7 +78,7 @@ const withFull = (patch: Partial<FullPiece>, full: AudioFull | null = fullPiece(
 async function coached(voice: Voice | null, audio = true, full: AudioFull | null = fullPiece()) {
   const fake = fakeDictation();
   if (audio) fake.api.features = [...(fake.api.features ?? []), MARK_AUDIO];
-  const coach = new Coach(fake.api, async () => [THREE_AS_TREE], voice);
+  const coach = new Coach(fake.api, async () => ({ marks: [THREE_AS_TREE], scores: [] }), voice);
   const samples = new Float32Array(16_000);
   samples.set(tone(0.4, PIECE_RATE), 1600);
   coach.piece(withFull({ audio: samples }, full));
@@ -204,7 +204,7 @@ test("a piece whose audio is no longer kept cannot be played", async () => {
   fake.api.features = [...(fake.api.features ?? []), MARK_AUDIO];
   const coach = new Coach(
     fake.api,
-    async () => [THREE_AS_TREE],
+    async () => ({ marks: [THREE_AS_TREE], scores: [] }),
     voiceOver(await tmp(), fakePipeline()),
   );
   for (let at = 0; at <= KEPT_SESSIONS; at += 1) {
@@ -229,7 +229,7 @@ test("a correction's Say it right is the corrected word, as long as the reader's
   fakeApi.api.features = [...(fakeApi.api.features ?? []), MARK_AUDIO];
   const coach = new Coach(
     fakeApi.api,
-    async () => [{ ...THREE_AS_TREE, word: "three" }],
+    async () => ({ marks: [{ ...THREE_AS_TREE, word: "three" }], scores: [] }),
     voiceOver(await tmp(), fake),
   );
   coach.piece(withFull({ audio: tone(1, PIECE_RATE) }));
