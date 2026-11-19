@@ -88,6 +88,14 @@ the heard phone in that place. Only words Britfone has are judged. Vowel
 differences, left-out and added sounds and a list of function words are never
 marked.
 
+Word stress ("DI-ve-lu-per" for "dee-VE-lu-per", `pronounce/stress.ts`) is
+marked on a word of two or more vowels with a known stress when another
+syllable is louder, longer and higher than the stressed one, each cue scaled
+by the whole sentence's, by more than natives ever do: the cut-offs come from
+the `stress` entry of `pronounce/data/thresholds.json` and the natives' leads in
+`native-stats.json`. Without both, or with that entry `"off"`, it marks nothing.
+A word with a substitution mark gets no stress mark too.
+
 These rules come from a benchmark on 13 Speech Accent Archive speakers (5
 German, 5 Swedish, 3 native English), where every other kind of edit was as
 common in natives as in learners. Do not retune them without rerunning it.
@@ -266,6 +274,7 @@ memory and 4 cores, so run it deliberately, on a machine with room:
 | `pronounce/worker-pipe.ts`, `calls.ts`, `protocol.ts`, `pcm.ts`                                             | How the extension and the worker talk                               |
 | `pronounce/judge.ts`, `contrasts.ts`, `align.ts`, `ctc.ts`, `phones.ts`, `dictionary.ts`, `not-mistakes.ts` | The judging                                                         |
 | `pronounce/force-align.ts`, `thresholds.ts`, `gop.ts`, `pitch.ts`                                           | Sentence alignment, the checks' cut-offs, phone goodness and pitch  |
+| `pronounce/stress.ts`                                                                                       | Word stress: the sentence-scaled cues, the lead, the stress mark    |
 | `pronounce/scores.ts`, `profile.ts`, `native.ts`, `confirmed.ts`, `accent-words.ts`                         | The accent profile and its confirmed-pattern underlines             |
 | `pronounce/accent-panel.ts`, `panel/`                                                                       | The "Your accent" window: its data and its page                     |
 | `tools/calibrate/`                                                                                          | Measures natives and learners on a rented box (its `README.md`)     |

@@ -73,6 +73,8 @@ test("each word gets its pronunciation, phones' goodness, vowels' cues and the c
     variantSource: "britfone",
     stress: 1,
     stressVowel: 0,
+    // Britfone's and CMUdict's "need" are one pronunciation, stressed on its only vowel.
+    stressAccepts: [0],
   });
   expect(need.phones.map((phone) => phone.phone)).toEqual(["n", "iː", "d"]);
   expect(need.phones[2]?.competitor).toBe("t");

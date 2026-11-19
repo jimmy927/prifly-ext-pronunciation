@@ -23,7 +23,13 @@ The steps (`run.py` runs all three, each resumable):
    per-phone goodness, per-vowel stress cues, and the swaps the checks look at.
 3. `stats.py`: natives decide each check's cut-off (at most 1 flag per 200 judged words for
    `maybe`, 1 per 1000 for `sure`); learners decide whether it ships (precision ≥ 0.80 on at
-   least 20 labelled flags, else `off: true`).
+   least 20 labelled flags, else `off: true`). Word stress (`stress`) the same way, per cue
+   combination on the lead `pronounce/stress.ts` measures, with speechocean762's word stress
+   scores as the learner labels; without them (labels.jsonl written before fetch.py kept
+   them) it stays `off`. To add them to a finished fetch, delete
+   `WORK/corpora/speechocean762/.done` and run the fetch step again (it rereads the kept
+   archive and keeps the wavs already converted), then the stats step; the dump need not run again, though a new dump also writes
+   `stressAccepts`, without which a lead to another accepted stress counts against natives.
 
 ## A fresh Vast.ai box
 

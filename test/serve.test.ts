@@ -64,6 +64,8 @@ test("the worker has both dictionaries, and a check thresholds.json turns off is
   const { all } = await loaded([], { contrasts: { th: { off: true } } });
   expect(all.dictionary.get("street")).toEqual([["s", "t", "ɹ", "iː", "t"]]);
   expect(all.dictionary.get("three")).toHaveLength(1);
+  // No native-stats.json beside it, and no stress entry: word stress is off.
+  expect(all.stress).toBeNull();
   expect(await answerJudge(TWO_WORDS, all)).toMatchObject({ type: "marks", marks: [] });
 });
 

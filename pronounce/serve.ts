@@ -14,6 +14,7 @@ import { exitWhenOrphaned } from "./lifetime";
 import { decodeFloats } from "./pcm";
 import { JudgeRequest, type PronounceArgs, type PronounceLine } from "./protocol";
 import { scorePiece } from "./scores";
+import { loadStressCheck, type StressCheck, stressMarks } from "./stress";
 import { loadThresholds, type Thresholds } from "./thresholds";
 
 /** What the worker needs of the model: logits per frame for normalised 16 kHz audio. */
@@ -28,6 +29,8 @@ export type Loaded = {
   vocab: Vocab;
   dictionary: Dictionary;
   thresholds: Thresholds;
+  /** Word stress (`stress.ts`); null while the calibration files do not turn it on. */
+  stress: StressCheck | null;
 };
 
 /** `audio` scaled to zero mean and unit variance, as the model was trained on (`do_normalize`). */
@@ -41,7 +44,7 @@ export function normalised(audio: Float32Array): Float32Array {
   return audio.map((sample) => (sample - mean) * scale);
 }
 
-/** The model, `vocab.json`, Britfone and CMUdict as `args` names them, and the checks' cut-offs (`thresholds.ts`). */
+/** The model, `vocab.json`, Britfone and CMUdict as `args` names them, the checks' cut-offs (`thresholds.ts`) and word stress's (`stress.ts`, with `native-stats.json` beside `thresholds.json`). */
 export async function loadAll(
   args: PronounceArgs,
   open: OpenModel,
@@ -53,22 +56,26 @@ export async function loadAll(
     parseCmudict(await Bun.file(args.cmudict).text()),
   );
   const thresholds = await loadThresholds(thresholdsPath);
+  const stress = await loadStressCheck(thresholdsPath);
   const model = await open(args.model, args.threads);
-  return { model, vocab: vocabFrom(json), dictionary, thresholds };
+  return { model, vocab: vocabFrom(json), dictionary, thresholds, stress };
 }
 
 /** One request's marks and the accent profile's scores (`scores.ts`), or its failure as an `error` line for its id. */
 export async function answerJudge(request: JudgeRequest, loaded: Loaded): Promise<PronounceLine> {
   const started = performance.now();
   try {
-    const out = await loaded.model.logits(normalised(decodeFloats(request.pcm)));
+    const audio = decodeFloats(request.pcm);
+    const out = await loaded.model.logits(normalised(audio));
     const post = posteriors(out.data, out.frames, out.size);
+    const { stress } = loaded;
     const marks = judgeWords(
       post,
       loaded.vocab,
       loaded.dictionary,
       request.words,
       loaded.thresholds,
+      stress === null ? undefined : (read) => stressMarks(read, request.words, audio, stress),
     );
     const scores = scorePiece(post, loaded.vocab, loaded.dictionary, request.words);
     return { type: "marks", id: request.id, marks, scores, ms: performance.now() - started };

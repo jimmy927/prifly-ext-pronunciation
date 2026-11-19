@@ -343,18 +343,30 @@ function judgeWord(
   };
 }
 
-/** The marks for `words` of a piece whose model output is `post`. */
+/** Marks of another kind for a piece once read (word stress, `stress.ts`), handed in by the worker so this file needs none of their data. */
+export type MoreMarks = (read: ReadPiece) => readonly Judged[];
+
+/**
+ * The marks for `words` of a piece whose model output is `post`: the
+ * contrasts' (`judgeWord`), then `more`'s for the words none of those marked,
+ * at most one mark a word, in the words' order.
+ */
 export function judgeWords(
   post: Posteriors,
   vocab: Vocab,
   dictionary: Dictionary,
   words: readonly JudgeWord[],
   thresholds: Thresholds = NO_THRESHOLDS,
+  more?: MoreMarks,
 ): Judged[] {
   const read = readPiece(post, vocab, dictionary, words);
   if (read === null) return [];
-  return words.flatMap((word, index) => {
+  const found = words.flatMap((word, index) => {
     const judged = judgeWord(read, index, word, thresholds);
     return judged === null ? [] : [judged];
   });
+  if (more === undefined) return found;
+  const marked = new Set(found.map((one) => one.index));
+  const extra = more(read).filter((one) => !marked.has(one.index));
+  return [...found, ...extra].sort((a, b) => a.index - b.index);
 }

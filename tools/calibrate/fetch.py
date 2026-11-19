@@ -280,7 +280,14 @@ def speechocean_labels(utt: str, entry: dict) -> dict:
                     "score": score,
                 }
             )
-        words.append({"text": word.get("text", ""), "accuracy": word.get("accuracy"), "phones": phones})
+        words.append(
+            {
+                "text": word.get("text", ""),
+                "accuracy": word.get("accuracy"),
+                "stress": word.get("stress"),
+                "phones": phones,
+            }
+        )
     return {"utt": utt, "corpus": "speechocean762", "words": words}
 
 

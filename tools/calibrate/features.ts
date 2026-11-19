@@ -1,8 +1,8 @@
 /**
  * What `dump.ts` writes for each word of an utterance, one JSON line each:
  * the pronunciation the alignment chose, each phone's goodness
- * (`pronounce/gop.ts`), each vowel's stress cues, the dictionary's stress,
- * and every swap the checks look at with its posterior and the conditions
+ * (`pronounce/gop.ts`), each vowel's stress cues, the dictionary's stress
+ * (and which vowel the other accepted pronunciations stress), and every swap the checks look at with its posterior and the conditions
  * `judge.ts` marks it under (`candidatesOf`), so `stats.py` can choose
  * cut-offs that the extension then applies exactly as measured.
  */
@@ -22,6 +22,7 @@ import {
   type Vocab,
 } from "../../pronounce/judge";
 import { isVowel } from "../../pronounce/phones";
+import { acceptedStresses } from "../../pronounce/stress";
 
 /** Numbers kept to 4 decimals: enough for any cut-off, a third the bytes. */
 const round = (x: number) => Math.round(x * 1e4) / 1e4;
@@ -65,6 +66,8 @@ export type WordRecord = {
   /** The index of the stressed phone of the chosen pronunciation, and which of its vowels that is (-1: none). */
   stress: number;
   stressVowel: number;
+  /** Which vowel, by order, each accepted pronunciation with as many vowels stresses (`stress.ts`): a lead to one of them is no flag. */
+  stressAccepts: number[];
   phones: PhoneRecord[];
   vowels: VowelRecord[];
   candidates: Candidate[];
@@ -162,6 +165,7 @@ function wordRecord(
     to: chosen?.word.to ?? -1,
     stress,
     stressVowel: vowelAt.indexOf(stress),
+    stressAccepts: chosen === null ? [] : acceptedStresses(entry.pronunciations, said),
     phones: phoneRecords(read, phones),
     vowels: vowelRecords(audio, said, phones, vowelAt, stress),
     candidates: candidatesOf(read, i).map((one) => ({ ...one, posterior: round(one.posterior) })),

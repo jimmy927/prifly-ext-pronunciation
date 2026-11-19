@@ -7,9 +7,12 @@ speechocean762, l2arctic, with CORPORA/<corpus>/labels.jsonl from fetch.py) and 
                          natives get at most 1 flag per 200 judged words, "sure" at 1 per
                          1000; "off": true when learners' flags at "maybe" are right
                          less than 80% of the time, too few to tell, or no cut-off is low
-                         enough on natives
+                         enough on natives; and the same for word stress ("stress": per cue combination the
+                         lead cut-offs, natives at 1 per 200 and 1 per 1000 read words; it
+                         ships only on learners' word stress scores, `decide_stress`)
   OUT/native-stats.json  per phone and per vowel the natives' LPR percentiles, per vowel
-                         the length percentiles, and the natives' stress margins
+                         the length percentiles, and the natives' stress margins (per cue,
+                         and the leads pronounce/stress.ts measures, per cue combination)
   REPORT                 every number above, readable
 
 A flag here is exactly what pronounce/judge.ts marks (`marks`): a candidate swap the
@@ -20,6 +23,7 @@ accepted pronunciation explains, at or over the cut-off.
 from __future__ import annotations
 
 import argparse
+import bisect
 import difflib
 import json
 import math
@@ -40,6 +44,17 @@ PERCENTILES = [0.5, 1, 5, 10, 25, 50, 75, 90, 95, 99]
 GRID = [round(0.50 + 0.005 * step, 3) for step in range(100)]
 TODAY = 0.70
 
+# Word stress, as pronounce/stress.ts reads it (test/fixtures/stress-sentence.json holds both to the same numbers).
+STRESS = "stress"
+COMBOS = ["dur+rms+f0", "dur+rms"]
+MIN_POOL = 4
+FLOOR = {"duration": 0.1, "rms": 1.0, "pitch": 0.5}
+# The lead cut-offs tried, 0.05 to 6.00: at zero the other syllable only ties with the stressed one.
+LEAD_GRID = [round(0.05 * step, 2) for step in range(1, 121)]
+LEAD_PERCENTILES = [1, 5, 10, 25, 50, 75, 90, 95, 99, 99.5, 99.9]
+# speechocean762 scores a word's stress 10 (right, or one syllable) or 5 (wrong); under this it was wrong.
+STRESS_WRONG = 7.5
+
 
 def percentile(values: list[float], p: float) -> float | None:
     if not values:
@@ -57,6 +72,67 @@ def summary(values: list[float]) -> dict:
         value = percentile(ordered, p)
         out[f"p{p}"] = None if value is None else round(value, 4)
     return out
+
+
+def _scale(values: list[float], floor: float) -> tuple[float, float] | None:
+    if len(values) < MIN_POOL:
+        return None
+    mean = sum(values) / len(values)
+    variance = sum((v - mean) ** 2 for v in values) / len(values)
+    return mean, max(floor, math.sqrt(variance))
+
+
+def _voiced(vowel: dict) -> bool:
+    return vowel["f0Hz"] is not None and vowel["f0Hz"] > 0
+
+
+def _reading(word: dict, scales: dict) -> dict | None:
+    vowels, stressed = word["vowels"], word["stressed"]
+    if stressed < 0 or stressed >= len(vowels) or len(vowels) < 2:
+        return None
+    if scales["duration"] is None or scales["rms"] is None or any(v["durationMs"] <= 0 for v in vowels):
+        return None
+    combo = "dur+rms+f0" if all(_voiced(v) for v in vowels) and scales["pitch"] is not None else "dur+rms"
+
+    def prominence(v: dict) -> float:
+        (dm, ds), (rm, rs) = scales["duration"], scales["rms"]
+        parts = [(math.log(max(1, v["durationMs"])) - dm) / ds, (v["rmsDb"] - rm) / rs]
+        if combo == "dur+rms+f0":
+            pm, ps = scales["pitch"]
+            parts.append((12 * math.log2(v["f0Hz"]) - pm) / ps)
+        return sum(parts) / len(parts)
+
+    scores = [prominence(v) for v in vowels]
+    winner, lead = -1, -math.inf
+    for at, score in enumerate(scores):
+        if at != stressed and score - scores[stressed] > lead:
+            winner, lead = at, score - scores[stressed]
+    return {"combo": combo, "stressed": stressed, "winner": winner, "lead": lead, "accepted": winner in word["accepts"]}
+
+
+def stress_readings(words: list[dict]) -> list[dict | None]:
+    """pronounce/stress.ts's `stressReadings`: each word's lead, its cues scaled by the whole sentence's."""
+    vowels = [v for word in words for v in word["vowels"] if v["durationMs"] > 0]
+    scales = {
+        "duration": _scale([math.log(max(1, v["durationMs"])) for v in vowels], FLOOR["duration"]),
+        "rms": _scale([v["rmsDb"] for v in vowels], FLOOR["rms"]),
+        "pitch": _scale([12 * math.log2(v["f0Hz"]) for v in vowels if _voiced(v)], FLOOR["pitch"]),
+    }
+    return [_reading(word, scales) for word in words]
+
+
+def record_readings(records: list[dict]) -> list[dict | None]:
+    """An utterance's dump records as stress readings; a dump from before `stressAccepts` accepts no other stress."""
+    return stress_readings(
+        [
+            {
+                "vowels": record["vowels"],
+                "stressed": record.get("stressVowel", -1) if record["judged"] else -1,
+                "accepts": record.get("stressAccepts", []),
+            }
+            for record in records
+        ]
+    )
 
 
 def eligible(candidate: dict) -> bool:
@@ -125,8 +201,15 @@ class Tally:
         self.native_peaks: dict[str, list[float]] = defaultdict(list)
         # Per check, learner rows: (corpus, posterior, eligible, matched, error, heard-as-flagged).
         self.learner: dict[str, list[tuple]] = defaultdict(list)
+        # Word stress, per read word: natives (combo, lead, accepted); learners (corpus, combo, lead, accepted,
+        # the raters' stress score or None).
+        self.stress_native: list[tuple] = []
+        self.stress_learner: list[tuple] = []
 
     def native(self, records: list[dict]) -> None:
+        for reading in record_readings(records):
+            if reading is not None:
+                self.stress_native.append((reading["combo"], reading["lead"], reading["accepted"]))
         for record in records:
             for phone in record["phones"]:
                 self.phone_lpr[phone["phone"]].append(phone["lpr"])
@@ -166,6 +249,10 @@ class Tally:
 
     def learners(self, corpus: str, records: list[dict], labels: dict | None) -> None:
         matched = match_words(records, labels["words"]) if labels else {}
+        for record, reading in zip(records, record_readings(records)):
+            if reading is not None:
+                score = (matched.get(record["i"]) or {}).get("stress")
+                self.stress_learner.append((corpus, reading["combo"], reading["lead"], reading["accepted"], score))
         for record in records:
             if not record["judged"] or record["variant"] is None:
                 continue
@@ -231,7 +318,82 @@ def decide(tally: Tally, args) -> dict:
     return out
 
 
-def thresholds_json(decided: dict, source: str) -> dict:
+class NativeLeads:
+    """The natives' words of one cue combination read for stress: how many, and the leads the extension could mark."""
+
+    def __init__(self, rows: list[tuple], combo: str) -> None:
+        read = [row for row in rows if row[0] == combo]
+        self.n = len(read)
+        self.markable = sorted(lead for _, lead, accepted in read if not accepted)
+
+    def rate(self, cut: float) -> float:
+        """Words marked at lead `cut`, per word read."""
+        if self.n == 0:
+            return math.inf
+        return (len(self.markable) - bisect.bisect_left(self.markable, cut)) / self.n
+
+    def lowest(self, rate: float) -> float | None:
+        return next((cut for cut in LEAD_GRID if self.rate(cut) <= rate), None)
+
+
+def stress_learner_numbers(rows: list[tuple], cuts: dict, corpus: str | None = None) -> dict:
+    """Learner flags at `cuts` (combo -> maybe), how many the raters scored, how many of those had the stress wrong."""
+    def flagged(row: tuple) -> bool:
+        return row[1] in cuts and not row[3] and row[2] >= cuts[row[1]]
+
+    def said_wrong(row: tuple) -> bool:
+        return row[4] is not None and row[4] < STRESS_WRONG
+
+    rows = [row for row in rows if corpus is None or row[0] == corpus]
+    flags = [row for row in rows if flagged(row)]
+    labelled = [row for row in flags if row[4] is not None]
+    right = sum(1 for row in labelled if said_wrong(row))
+    wrong = [row for row in rows if said_wrong(row)]
+    found = sum(1 for row in wrong if flagged(row))
+    return {
+        "flags": len(flags),
+        "matched": len(labelled),
+        "right": right,
+        "precision": right / len(labelled) if labelled else None,
+        "recall": found / len(wrong) if wrong else None,
+        "labelledWords": sum(1 for row in rows if row[4] is not None),
+        "labelledWrong": len(wrong),
+    }
+
+
+def decide_stress(tally: Tally, args) -> dict:
+    """Word stress: natives set each combination's lead cut-offs, learners with stress scores decide whether it ships."""
+    combos = {}
+    for combo in COMBOS:
+        natives = NativeLeads(tally.stress_native, combo)
+        maybe = sure = None
+        if natives.n >= args.min_stress_words:
+            maybe, sure = natives.lowest(args.fa_rate), natives.lowest(args.sure_fa_rate)
+            if maybe is not None and sure is not None:
+                sure = max(sure, maybe)
+        combos[combo] = {
+            "n": natives.n,
+            "maybe": maybe,
+            "sure": sure,
+            "rateAtMaybe": None if maybe is None else natives.rate(maybe),
+            "rateAtZero": natives.rate(LEAD_GRID[0]) if natives.n else None,
+        }
+    cuts = {combo: c["maybe"] for combo, c in combos.items() if c["maybe"] is not None and c["sure"] is not None}
+    learners = stress_learner_numbers(tally.stress_learner, cuts)
+    if not cuts:
+        why = f"no cut-off keeps natives under the false-alarm rate on at least {args.min_stress_words} native words"
+    elif learners["labelledWords"] == 0:
+        why = "no learner stress labels: natives alone cannot show the flags are right"
+    elif learners["matched"] < args.min_flags:
+        why = f"only {learners['matched']} labelled learner flags (need {args.min_flags})"
+    elif learners["precision"] < args.min_precision:
+        why = f"precision {learners['precision']:.2f} under {args.min_precision:.2f}"
+    else:
+        why = ""
+    return {"combos": combos, "learners": learners, "off": why != "", "why": why}
+
+
+def thresholds_json(decided: dict, source: str, stress: dict | None = None) -> dict:
     contrasts = {}
     for check, d in decided.items():
         entry: dict = {"off": d["off"]}
@@ -242,7 +404,22 @@ def thresholds_json(decided: dict, source: str) -> dict:
         if d["why"]:
             entry["why"] = d["why"]
         contrasts[check] = entry
+    if stress is not None:
+        cuts = {
+            combo: {"maybe": c["maybe"], "sure": c["sure"]}
+            for combo, c in stress["combos"].items()
+            if c["maybe"] is not None and c["sure"] is not None
+        }
+        contrasts[STRESS] = {"off": stress["off"], "cuts": cuts, **({"why": stress["why"]} if stress["why"] else {})}
     return {"generated": time.strftime("%Y-%m-%d"), "source": source, "contrasts": contrasts}
+
+
+def lead_summary(values: list[float]) -> dict:
+    out: dict = {"n": len(values)}
+    for p in LEAD_PERCENTILES:
+        value = percentile(values, p)
+        out[f"p{p}"] = None if value is None else round(value, 4)
+    return out
 
 
 def native_stats(tally: Tally) -> dict:
@@ -259,6 +436,11 @@ def native_stats(tally: Tally) -> dict:
         "stress": {
             **{cue: summary(values) for cue, values in tally.margins.items()},
             **{f"stressed_{cue}": round(sum(v) / len(v), 4) for cue, v in tally.wins.items() if v},
+            "lead": {
+                combo: lead_summary([row[1] for row in tally.stress_native if row[0] == combo])
+                for combo in COMBOS
+                if any(row[0] == combo for row in tally.stress_native)
+            },
         },
     }
 
@@ -271,7 +453,7 @@ def fmt(value, digits: int = 3) -> str:
     return str(value)
 
 
-def report(tally: Tally, decided: dict, args) -> str:
+def report(tally: Tally, decided: dict, stress: dict, args) -> str:
     lines = [
         "# Calibration report",
         "",
@@ -346,7 +528,55 @@ def report(tally: Tally, decided: dict, args) -> str:
         wins = tally.wins[win]
         share = sum(wins) / len(wins) if wins else None
         lines.append(f"| {cue} | {s['n']} | {fmt(s['p5'])} | {fmt(s['p10'])} | {fmt(s['p25'])} | {fmt(s['p50'])} | {fmt(s['p75'])} | {fmt(share)} |")
+    lines += stress_report(tally, stress, args)
     return "\n".join(lines) + "\n"
+
+
+def stress_report(tally: Tally, stress: dict, args) -> list[str]:
+    learners = stress["learners"]
+    lines = [
+        "",
+        "## Word stress",
+        "",
+        "How it is judged (pronounce/stress.ts, mirrored by `stress_readings` here): a word is read when it "
+        "is no function word, Britfone has it, and its chosen pronunciation has 2+ vowels and a stress. Each "
+        "vowel's length (log ms), loudness (dB) and pitch (semitones) is scaled by the mean and spread of all "
+        "the sentence's vowels, so the speaker's rate, level and voice cancel out; a vowel's prominence is "
+        "the mean of its scaled cues (pitch only when every vowel of the word is voiced: `dur+rms+f0`, else "
+        "`dur+rms`). The word's lead is the most prominent other vowel's prominence minus the stressed "
+        "one's; a lead to a syllable another accepted pronunciation stresses is never a flag.",
+        "",
+        f"Natives set the cut-offs per combination: the lowest lead at which at most {args.fa_rate:.4f} of "
+        f"their read words would be marked (`maybe`), {args.sure_fa_rate:.4f} (`sure`), on at least "
+        f"{args.min_stress_words} native words. It ships only when learners' flags are right at least "
+        f"{args.min_precision:.0%} of the time on at least {args.min_flags} flags the raters scored: a flag is "
+        f"right when speechocean762 scored the word's stress under {STRESS_WRONG} (5: wrong; 10: right). "
+        "L2-ARCTIC has no stress labels. Without learner stress scores the check stays off: a native "
+        "false-alarm cap alone says how rarely natives are flagged, not how often a learner's flag is right.",
+        "",
+        "| combination | native words read | native rate at lead 0.05 | maybe | native rate at maybe | sure |",
+        "|---|---|---|---|---|---|",
+    ]
+    for combo, c in stress["combos"].items():
+        lines.append(
+            f"| {combo} | {c['n']} | {fmt(c['rateAtZero'], 4)} | {fmt(c['maybe'])} | {fmt(c['rateAtMaybe'], 4)} | {fmt(c['sure'])} |"
+        )
+    cuts = {combo: c["maybe"] for combo, c in stress["combos"].items() if c["maybe"] is not None}
+    lines += [
+        "",
+        "| learners | words read | scored | scored wrong | flags | scored flags | precision | recall |",
+        "|---|---|---|---|---|---|---|---|",
+    ]
+    for corpus in sorted(LEARNER):
+        n = stress_learner_numbers(tally.stress_learner, cuts, corpus)
+        read = sum(1 for row in tally.stress_learner if row[0] == corpus)
+        lines.append(
+            f"| {corpus} | {read} | {n['labelledWords']} | {n['labelledWrong']} | {n['flags']} | {n['matched']} | "
+            f"{fmt(n['precision'])} | {fmt(n['recall'])} |"
+        )
+    verdict = "off: " + stress["why"] if stress["off"] else "yes"
+    lines += ["", f"Ships: {verdict} (all learners: {learners['matched']} scored flags, precision {fmt(learners['precision'])})."]
+    return lines
 
 
 def load_labels(corpora: Path) -> dict[str, dict]:
@@ -370,6 +600,9 @@ def main(argv: list[str] | None = None) -> None:
     parser.add_argument("--sure-fa-rate", type=float, default=1 / 1000, help="native flags per judged word for sure")
     parser.add_argument("--min-precision", type=float, default=0.80)
     parser.add_argument("--min-flags", type=int, default=20, help="labelled learner flags needed to judge precision")
+    parser.add_argument(
+        "--min-stress-words", type=int, default=2000, help="native words read for stress needed to set its cut-offs"
+    )
     args = parser.parse_args(argv)
     labels = load_labels(args.corpora)
     tally = Tally()
@@ -388,11 +621,13 @@ def main(argv: list[str] | None = None) -> None:
     if tally.native_judged == 0:
         sys.exit("stats: no native words in the dump; nothing to calibrate against")
     decided = decide(tally, args)
+    stress = decide_stress(tally, args)
     args.out.mkdir(parents=True, exist_ok=True)
     source = ", ".join(f"{name} {c['utterances']}" for name, c in sorted(tally.corpora.items()))
-    (args.out / "thresholds.json").write_text(json.dumps(thresholds_json(decided, source), indent=2) + "\n")
+    thresholds = thresholds_json(decided, source, stress)
+    (args.out / "thresholds.json").write_text(json.dumps(thresholds, indent=2) + "\n")
     (args.out / "native-stats.json").write_text(json.dumps(native_stats(tally), ensure_ascii=False, indent=1) + "\n")
-    args.report.write_text(report(tally, decided, args), encoding="utf-8")
+    args.report.write_text(report(tally, decided, stress, args), encoding="utf-8")
     print(f"stats: wrote {args.out / 'thresholds.json'}, {args.out / 'native-stats.json'}, {args.report}")
 
 
