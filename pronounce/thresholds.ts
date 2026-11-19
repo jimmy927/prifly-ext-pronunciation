@@ -55,11 +55,21 @@ export function parseThresholds(json: unknown): Thresholds {
   return cuts;
 }
 
-/** The file's cut-offs; `NO_THRESHOLDS` when there is no file. */
+/**
+ * The file's cut-offs; `NO_THRESHOLDS` when there is no file, or when it is
+ * not valid, which is said on stderr (the extension logs it) so the worker
+ * still starts with the defaults.
+ */
 export async function loadThresholds(path: string = THRESHOLDS_PATH): Promise<Thresholds> {
   const file = Bun.file(path);
   if (!(await file.exists())) return NO_THRESHOLDS;
-  return parseThresholds(await file.json());
+  try {
+    return parseThresholds(await file.json());
+  } catch (caught) {
+    const why = caught instanceof Error ? caught.message : String(caught);
+    process.stderr.write(`pronounce: ${path} ignored, defaults used: ${why}\n`);
+    return NO_THRESHOLDS;
+  }
 }
 
 /** The cut-offs of check `id`. */

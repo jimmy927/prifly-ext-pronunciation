@@ -16,6 +16,10 @@ test("no file keeps every check at 0.70 / 0.88", async () => {
   const some = await loadThresholds(join(folder, "thresholds.json"));
   expect(cutOf(some, "th")).toEqual({ maybe: 0.8, sure: 0.88, off: false });
   expect(cutOf(some, "w-v")).toEqual(DEFAULT_CUT);
+  // A broken file leaves every check at the defaults rather than stopping the worker.
+  await writeFile(join(folder, "thresholds.json"), "{ not json");
+  const broken = await loadThresholds(join(folder, "thresholds.json"));
+  expect(cutOf(broken, "th")).toEqual(DEFAULT_CUT);
 });
 
 test("an id that is no check is left out, a sure below its maybe is raised to it, other keys ignored", () => {
