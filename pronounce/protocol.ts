@@ -31,6 +31,8 @@ export const Judged = z.strictObject({
   sound: z.string(),
   how: z.string(),
   posterior: z.number().min(0).max(1),
+  /** The mark's level under its check's cut-offs (`thresholds.ts`). */
+  level: z.enum(["sure", "maybe"]).optional(),
   said: z.string(),
   say: z.string(),
   fix: z.string(),
@@ -56,6 +58,8 @@ export const PronounceArgs = z.strictObject({
   model: z.string(),
   vocab: z.string(),
   dictionary: z.string(),
+  /** CMUdict, the American pronunciations (`dictionary.ts`). */
+  cmudict: z.string(),
   /** Intra-op threads: `PRONOUNCE_THREADS` (4), so dictation and the reader's work keep the rest. */
   threads: z.number().int().positive(),
 });

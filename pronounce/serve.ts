@@ -8,11 +8,12 @@
 
 import { constants, setPriority } from "node:os";
 import { posteriors } from "./ctc";
-import { type Dictionary, parseDictionary } from "./dictionary";
+import { type Dictionary, mergeDictionaries, parseCmudict, parseDictionary } from "./dictionary";
 import { judgeWords, type Vocab, vocabFrom } from "./judge";
 import { exitWhenOrphaned } from "./lifetime";
 import { decodeFloats } from "./pcm";
 import { JudgeRequest, type PronounceArgs, type PronounceLine } from "./protocol";
+import { loadThresholds, type Thresholds } from "./thresholds";
 
 /** What the worker needs of the model: logits per frame for normalised 16 kHz audio. */
 export type PhoneModel = {
@@ -21,7 +22,12 @@ export type PhoneModel = {
 
 export type OpenModel = (path: string, threads: number) => Promise<PhoneModel>;
 
-export type Loaded = { model: PhoneModel; vocab: Vocab; dictionary: Dictionary };
+export type Loaded = {
+  model: PhoneModel;
+  vocab: Vocab;
+  dictionary: Dictionary;
+  thresholds: Thresholds;
+};
 
 /** `audio` scaled to zero mean and unit variance, as the model was trained on (`do_normalize`). */
 export function normalised(audio: Float32Array): Float32Array {
@@ -34,12 +40,20 @@ export function normalised(audio: Float32Array): Float32Array {
   return audio.map((sample) => (sample - mean) * scale);
 }
 
-/** The model, `vocab.json` and Britfone, as `args` names them. */
-export async function loadAll(args: PronounceArgs, open: OpenModel): Promise<Loaded> {
+/** The model, `vocab.json`, Britfone and CMUdict as `args` names them, and the checks' cut-offs (`thresholds.ts`). */
+export async function loadAll(
+  args: PronounceArgs,
+  open: OpenModel,
+  thresholdsPath?: string,
+): Promise<Loaded> {
   const json = (await Bun.file(args.vocab).json()) as Record<string, number>;
-  const dictionary = parseDictionary(await Bun.file(args.dictionary).text());
+  const dictionary = mergeDictionaries(
+    parseDictionary(await Bun.file(args.dictionary).text()),
+    parseCmudict(await Bun.file(args.cmudict).text()),
+  );
+  const thresholds = await loadThresholds(thresholdsPath);
   const model = await open(args.model, args.threads);
-  return { model, vocab: vocabFrom(json), dictionary };
+  return { model, vocab: vocabFrom(json), dictionary, thresholds };
 }
 
 /** One request's marks, or its failure as an `error` line for its id. */
@@ -48,7 +62,13 @@ export async function answerJudge(request: JudgeRequest, loaded: Loaded): Promis
   try {
     const out = await loaded.model.logits(normalised(decodeFloats(request.pcm)));
     const post = posteriors(out.data, out.frames, out.size);
-    const marks = judgeWords(post, loaded.vocab, loaded.dictionary, request.words);
+    const marks = judgeWords(
+      post,
+      loaded.vocab,
+      loaded.dictionary,
+      request.words,
+      loaded.thresholds,
+    );
     return { type: "marks", id: request.id, marks, ms: performance.now() - started };
   } catch (caught) {
     return { type: "error", id: request.id, message: String(caught) };

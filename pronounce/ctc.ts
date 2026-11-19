@@ -13,7 +13,10 @@ export type Posteriors = { frames: number; size: number; probs: Float32Array };
 export type HeardToken = { id: number; token: string; from: number; to: number };
 
 /** The tokens that are no phone: the blank and the sentence marks. */
-const SPECIAL = new Set(["<pad>", "<s>", "</s>", "<unk>"]);
+export const SPECIAL: ReadonlySet<string> = new Set(["<pad>", "<s>", "</s>", "<unk>"]);
+
+/** The blank's token id (`<pad>`). */
+export const BLANK_ID = 0;
 
 /** `logits` (`frames` × `size`) as probabilities, each row by its own softmax. */
 export function posteriors(logits: Float32Array, frames: number, size: number): Posteriors {

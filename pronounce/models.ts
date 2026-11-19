@@ -11,6 +11,9 @@
  * - Britfone 3.0.1 (Jose Llarena, MIT), the British pronouncing dictionary
  *   the heard phones are compared with (`dictionary.ts`), from GitHub, with
  *   its LICENSE.
+ * - CMUdict (Carnegie Mellon, BSD-2-Clause), the American pronunciations
+ *   accepted beside Britfone's (`dictionary.ts`), from GitHub, with its
+ *   LICENSE: 3.6 MB, fetched rather than kept in the repository.
  *
  * They go where prifly keeps its own models, `<prifly data>/models/`, in the
  * folders prifly's built-in version used, so a machine that has them already
@@ -48,8 +51,21 @@ export const BRITFONE: Pinned = {
   },
 };
 
+export const CMUDICT: Pinned = {
+  name: "cmudict",
+  what: "the American dictionary",
+  host: "github",
+  repo: "cmusphinx/cmudict",
+  revision: "74790861f652b15e4ac49015a90074ad62a27690",
+  key: "cmudict.dict",
+  files: {
+    "cmudict.dict": "81917843c7f44ce2b094ac63873c2c7a4cf802040792c455ba3ca406891c3d22",
+    LICENSE: "bd4ce8e44170a5f9f481310ca85c51de3c4f851a65e679b40e603b143bd3542a",
+  },
+};
+
 /** Where the worker finds its files. */
-export type PronounceFiles = { model: string; vocab: string; dictionary: string };
+export type PronounceFiles = { model: string; vocab: string; dictionary: string; cmudict: string };
 
 /** One file on its way: which of the two (`what`), the file, and its bytes. */
 export type Fetching = { what: string; file: string; done: number; total: number };
@@ -85,7 +101,7 @@ function folderOf(dataFolder: string, spec: Pinned): string {
   return join(dataFolder, "models", `${spec.name}-${(spec.files[spec.key] ?? "").slice(0, 8)}`);
 }
 
-/** Both fetched where they are missing, the dictionary first (it is small); `progress` hears each file. */
+/** All three fetched where they are missing, the dictionaries first (they are small); `progress` hears each file. */
 export async function ensurePronounce(
   dataFolder: string,
   progress: (at: Fetching) => void,
@@ -99,10 +115,12 @@ export async function ensurePronounce(
       deps,
     );
   const words = await fetchOf(BRITFONE);
+  const american = await fetchOf(CMUDICT);
   const model = await fetchOf(PHONEME_MODEL);
   return {
     model: join(model, PHONEME_MODEL.key),
     vocab: join(model, PHONEME_MODEL.vocab),
     dictionary: join(words, BRITFONE.key),
+    cmudict: join(american, CMUDICT.key),
   };
 }

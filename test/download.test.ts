@@ -12,6 +12,7 @@ import {
 } from "../pronounce/download";
 import {
   BRITFONE,
+  CMUDICT,
   ensurePronounce,
   type Fetching,
   PHONEME_MODEL,
@@ -123,6 +124,10 @@ test("the pins are the benchmarked model and Britfone with its licence", () => {
   expect(urlOf(BRITFONE, "LICENSE.txt")).toBe(
     `https://raw.githubusercontent.com/JoseLlarena/Britfone/${BRITFONE.revision}/LICENSE.txt`,
   );
+  expect(Object.keys(CMUDICT.files)).toEqual(["cmudict.dict", "LICENSE"]);
+  expect(urlOf(CMUDICT, CMUDICT.key)).toBe(
+    `https://raw.githubusercontent.com/cmusphinx/cmudict/${CMUDICT.revision}/cmudict.dict`,
+  );
 });
 
 test("the dictionary comes first, named with what it is, and the worker gets the pinned paths", async () => {
@@ -142,7 +147,7 @@ test("the dictionary comes first, named with what it is, and the worker gets the
   expect(asked).toEqual([urlOf(BRITFONE, BRITFONE.key)]);
   expect(seen[0]).toMatchObject({ what: "the dictionary", file: BRITFONE.key });
   // With both folders marked as fetched nothing is asked.
-  for (const spec of [BRITFONE, PHONEME_MODEL]) {
+  for (const spec of [BRITFONE, CMUDICT, PHONEME_MODEL]) {
     const dir = join(data, "models", `${spec.name}-${(spec.files[spec.key] ?? "").slice(0, 8)}`);
     await Bun.write(join(dir, ".verified"), JSON.stringify(spec.files));
   }
@@ -153,6 +158,7 @@ test("the dictionary comes first, named with what it is, and the worker gets the
     join("wav2vec2-lv-60-espeak-3d1479b5", "onnx", "model_quantized.onnx"),
   );
   expect(files.dictionary).toEndWith(join("britfone-59f197e9", "britfone.main.3.0.1.csv"));
+  expect(files.cmudict).toEndWith(join("cmudict-81917843", "cmudict.dict"));
 });
 
 test("prifly's data folder per system", () => {

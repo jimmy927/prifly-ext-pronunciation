@@ -39,7 +39,7 @@
 
     "@biomejs/cli-win32-x64": ["@biomejs/cli-win32-x64@2.6.6", "", { "os": "win32", "cpu": "x64" }, "sha512-B7KMG26A4I9lAuxwBGMmiVcjMGAeJRoz+pzFt9brRvOAsIrgOu8ptJld5rUWui6tM1uiJwxeJhhDPuAiZtxXdw=="],
 
-    "@prifly/extension-api": ["@prifly/extension-api@file:../../../../../mnt/c/Users/jimmy/src/prifly/packages/extension-api", { "devDependencies": { "@total-typescript/ts-reset": "^0.6.1" } }],
+    "@prifly/extension-api": ["@prifly/extension-api@file:/mnt/c/Users/jimmy/src/prifly/packages/extension-api", { "devDependencies": { "@total-typescript/ts-reset": "^0.6.1" } }],
 
     "@total-typescript/ts-reset": ["@total-typescript/ts-reset@0.6.1", "", {}, "sha512-cka47fVSo6lfQDIATYqb/vO1nvFfbPw7uWLayIXIhGETj0wcOOlrlkobOMDNQOFr9QOafegUPq13V2+6vtD7yg=="],
 

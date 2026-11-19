@@ -11,8 +11,13 @@ import * as ort from "onnxruntime-node";
 import { cpuSessionOptions } from "./engine";
 import type { PhoneModel } from "./serve";
 
-export async function openPhoneModel(path: string, threads: number): Promise<PhoneModel> {
-  const session = await ort.InferenceSession.create(path, cpuSessionOptions(threads));
+/** The model at `path`; `options` other than the CPU's only for `tools/calibrate/dump.ts`, never in the worker. */
+export async function openPhoneModel(
+  path: string,
+  threads: number,
+  options: ort.InferenceSession.SessionOptions = cpuSessionOptions(threads),
+): Promise<PhoneModel> {
+  const session = await ort.InferenceSession.create(path, options);
   const masked = session.inputNames.includes("attention_mask");
   return {
     logits: async (audio) => {

@@ -332,7 +332,7 @@ export class Coach {
       const spot = spots[one.index];
       if (spot === undefined || spot.text.length > MAX_LABEL) return [];
       if (isNotMistake(this.notMistakes, one.word, one.heard)) return [];
-      const level = levelOf(one.posterior);
+      const level = one.level ?? levelOf(one.posterior);
       const mark: DictationMark = {
         start: spot.start,
         end: spot.end,

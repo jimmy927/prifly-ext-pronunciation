@@ -7,7 +7,12 @@ import { PRONOUNCE_THREADS, PronounceRunner, type RunnerDeps } from "../pronounc
 import { statusLine } from "../pronounce/status";
 import { type FakeWorker, fakeWorker } from "./fake-worker";
 
-const FILES = { model: "/m/model.onnx", vocab: "/m/vocab.json", dictionary: "/b/britfone.csv" };
+const FILES = {
+  model: "/m/model.onnx",
+  vocab: "/m/vocab.json",
+  dictionary: "/b/britfone.csv",
+  cmudict: "/c/cmudict.dict",
+};
 
 function made(fetch: RunnerDeps["ensure"], stderr = "") {
   const workers: FakeWorker[] = [];

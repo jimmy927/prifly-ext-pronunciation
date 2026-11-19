@@ -9,9 +9,9 @@ import { answerJudge, loadAll, lowPriority, normalised, type PhoneModel } from "
 
 const VOCAB = { "<pad>": 0, "<s>": 1, "</s>": 2, "<unk>": 3, θ: 4, t: 5, ɹ: 6, iː: 7 };
 
-/** A model that hears "t ɹ iː" whatever it is given, sure of each, and keeps what it was given. */
+/** A model that hears "t ɹ iː" twice whatever it is given, sure of each, and keeps what it was given. */
 function fakeModel(given: Float32Array[]): PhoneModel {
-  const rows = [0, 5, 0, 6, 7, 0];
+  const rows = [0, 5, 0, 6, 7, 0, 5, 0, 6, 7, 0];
   const size = Object.keys(VOCAB).length;
   return {
     logits: async (audio) => {
@@ -25,38 +25,53 @@ function fakeModel(given: Float32Array[]): PhoneModel {
   };
 }
 
-async function loaded(given: Float32Array[] = []) {
+/** The worker's files in a folder of their own; `thresholds`, when given, as its thresholds.json. */
+async function loaded(given: Float32Array[] = [], thresholds?: object) {
   const folder = await mkdtemp(join(tmpdir(), "pronounce-"));
   await writeFile(join(folder, "vocab.json"), JSON.stringify(VOCAB));
   await writeFile(join(folder, "britfone.csv"), "THREE, θ ɹ ˈiː\nTREE, t ɹ ˈiː\n");
+  await writeFile(join(folder, "cmudict.dict"), "three TH R IY1\nstreet S T R IY1 T\n");
+  if (thresholds !== undefined) {
+    await writeFile(join(folder, "thresholds.json"), JSON.stringify(thresholds));
+  }
   const args = {
     model: join(folder, "model.onnx"),
     vocab: join(folder, "vocab.json"),
     dictionary: join(folder, "britfone.csv"),
+    cmudict: join(folder, "cmudict.dict"),
     threads: 4,
   };
   const opened: [string, number][] = [];
-  const all = await loadAll(args, async (path, threads) => {
+  const open = async (path: string, threads: number) => {
     opened.push([path, threads]);
     return fakeModel(given);
-  });
+  };
+  const all = await loadAll(args, open, join(folder, "thresholds.json"));
   return { all, opened, args };
 }
+
+const TWO_WORDS = {
+  op: "judge" as const,
+  id: "7",
+  pcm: encodeFloats(new Float32Array([0.2, 0.4, 0.6])),
+  words: [
+    { word: "three", from: 0, to: 6 * 320 },
+    { word: "tree", from: 6 * 320, to: 11 * 320 },
+  ],
+};
+
+test("the worker has both dictionaries, and a check thresholds.json turns off is never marked", async () => {
+  const { all } = await loaded([], { contrasts: { th: { off: true } } });
+  expect(all.dictionary.get("street")).toEqual([["s", "t", "ɹ", "iː", "t"]]);
+  expect(all.dictionary.get("three")).toHaveLength(1);
+  expect(await answerJudge(TWO_WORDS, all)).toMatchObject({ type: "marks", marks: [] });
+});
 
 test("the worker loads the model on the threads it is given, and answers a piece with its marks", async () => {
   const given: Float32Array[] = [];
   const { all, opened, args } = await loaded(given);
   expect(opened).toEqual([[args.model, 4]]);
-  const request = {
-    op: "judge" as const,
-    id: "7",
-    pcm: encodeFloats(new Float32Array([0.2, 0.4, 0.6])),
-    words: [
-      { word: "three", from: 0, to: 6 * 320 },
-      { word: "tree", from: 0, to: 6 * 320 },
-    ],
-  };
-  expect(await answerJudge(request, all)).toMatchObject({
+  expect(await answerJudge(TWO_WORDS, all)).toMatchObject({
     type: "marks",
     id: "7",
     marks: [{ index: 0, word: "three", heard: "tɹiː", expected: "θɹiː", sound: "th → t" }],

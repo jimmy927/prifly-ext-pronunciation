@@ -1,14 +1,17 @@
 import { expect, test } from "bun:test";
 import type { Posteriors } from "../pronounce/ctc";
-import { parseDictionary } from "../pronounce/dictionary";
+import { mergeDictionaries, parseCmudict, parseDictionary } from "../pronounce/dictionary";
 import {
+  candidatesOf,
   judgeWords,
   levelOf,
   MIN_HEARD_POSTERIOR,
+  readPiece,
   SAMPLES_PER_FRAME,
   SURE_POSTERIOR,
   Vocab,
 } from "../pronounce/judge";
+import { parseThresholds } from "../pronounce/thresholds";
 
 const vocab = new Vocab([
   "<pad>",
@@ -29,9 +32,14 @@ const vocab = new Vocab([
   "s",
   "p",
   "ɛ",
+  "n",
+  "ɪ",
+  "ʃ",
+  "ʒ",
 ]);
 const dictionary = parseDictionary(
-  "THREE, θ ɹ ˈiː\nBAD, b ˈæ d\nWORSE, w ˈɜː s\nWATER(1), w ˈɔː t ə\nTAB, t ˈæ b\nTHAT, ð ˈæ t\n",
+  "THREE, θ ɹ ˈiː\nBAD, b ˈæ d\nWORSE, w ˈɜː s\nWATER(1), w ˈɔː t ə\nTAB, t ˈæ b\nTHAT, ð ˈæ t\n" +
+    "NEED, n ˈiː d\nIT, ˈɪ t\nVERSION, v ˈɜː ʃ ə n\n",
 );
 
 /** Frames, each the probabilities of a few tokens; the rest of the frame goes to the blank. */
@@ -67,6 +75,7 @@ test("a th the model was sure was a t marks the word, with the sound and how to 
       sound: "th → t",
       how: "tongue tip between the teeth, let the air through",
       posterior: expect.closeTo(0.9, 5),
+      level: "sure",
       said: "TREE",
       say: "THREE",
       fix: "The TH (as in thin) came out as a T. Tongue tip between the teeth, let the air through.",
@@ -162,4 +171,96 @@ test("a sound left out at the start or the end of a word is no mark", () => {
 test("a function word is never marked, whatever was heard", () => {
   const post = framesOf([{ d: 0.95 }, { æ: 0.9 }, { t: 0.9 }, blank]);
   expect(judgeWords(post, vocab, dictionary, [word("That", 4)])).toEqual([]);
+});
+
+/** `rows` each repeated `count` times. */
+const held = (...runs: [Record<string, number>, number][]) =>
+  runs.flatMap(([row, count]) => Array.from({ length: count }, () => row));
+
+/** "need it", with the final d of need said as `final`: n 0-3, iː 4-9, the d 10-11, a pause, ɪ 15-18, t 19-20. */
+const needIt = (final: string) =>
+  framesOf(
+    held(
+      [{ n: 0.9 }, 4],
+      [{ iː: 0.9 }, 6],
+      [{ [final]: 0.92 }, 2],
+      [blank, 3],
+      [{ ɪ: 0.9 }, 4],
+      [{ t: 0.95 }, 2],
+      [blank, 4],
+    ),
+  );
+
+/** Parakeet's times for "need it", with need's put 400 ms (20 frames) late, over "it". */
+const lateNeed = [
+  { word: "need", from: 20 * SAMPLES_PER_FRAME, to: 32 * SAMPLES_PER_FRAME },
+  { word: "it", from: 15 * SAMPLES_PER_FRAME, to: 22 * SAMPLES_PER_FRAME },
+];
+
+test("need's time 400 ms late, over the t of it, no longer marks its d as a t: the sentence is aligned", () => {
+  // The window of ±2 frames around need's time held only the t of "it", aligned as a final d → t.
+  expect(judgeWords(needIt("d"), vocab, dictionary, lateNeed)).toEqual([]);
+  // The d really said as t is still marked, from where the alignment put it.
+  const [judged] = judgeWords(needIt("t"), vocab, dictionary, lateNeed);
+  expect(judged).toMatchObject({ index: 0, word: "need", sound: "final d → t" });
+});
+
+test("a word asked alone is found among the piece's other speech", () => {
+  // "bad three", with only three asked about (a correction): the filler takes "bad".
+  const post = framesOf(
+    held([{ b: 0.9 }, 3], [{ æ: 0.9 }, 5], [{ d: 0.9 }, 2], [blank, 3], [{ t: 0.9 }, 2]),
+  );
+  const rows = [...held([{ ɹ: 0.9 }, 3], [{ iː: 0.9 }, 5], [blank, 3])];
+  const all = framesOf([...Array.from({ length: post.frames }, () => blank), ...rows]);
+  all.probs.set(post.probs);
+  const asked = [{ word: "three", from: 13 * SAMPLES_PER_FRAME, to: 26 * SAMPLES_PER_FRAME }];
+  expect(judgeWords(all, vocab, dictionary, asked)).toMatchObject([
+    { index: 0, word: "three", sound: "th → t", heard: "tɹiː" },
+  ]);
+});
+
+test("a way of saying a word that another dictionary accepts is never a mistake", () => {
+  // Britfone's version has sh, CMUdict's zh; v ɜː ʒ ə n is the American way.
+  const post = framesOf(
+    held(
+      [{ v: 0.9 }, 3],
+      [{ ɜː: 0.9 }, 5],
+      [{ ʒ: 0.95 }, 3],
+      [blank, 3],
+      [{ n: 0.9 }, 3],
+      [blank, 2],
+    ),
+  );
+  const asked = [word("version", post.frames)];
+  expect(judgeWords(post, vocab, dictionary, asked)).toMatchObject([{ sound: "sh → zh" }]);
+  const both = mergeDictionaries(dictionary, parseCmudict("version V ER1 ZH AH0 N\n"));
+  expect(judgeWords(post, vocab, both, asked)).toEqual([]);
+  const read = readPiece(post, vocab, both, asked);
+  expect(read?.alignment.words[0]?.variant).toBe(1);
+});
+
+test("a word only CMUdict knows is aligned but never marked", () => {
+  const post = framesOf(held([{ t: 0.9 }, 3], [{ ɹ: 0.9 }, 3], [{ iː: 0.9 }, 3], [blank, 2]));
+  const american = mergeDictionaries(dictionary, parseCmudict("thrie TH R IY1\n"));
+  const asked = [word("thrie", post.frames)];
+  expect(judgeWords(post, vocab, american, asked)).toEqual([]);
+  const read = readPiece(post, vocab, american, asked);
+  expect(read === null ? [] : candidatesOf(read, 0)).toContainEqual(
+    expect.objectContaining({ expected: "θ", heard: "t", wasHeard: true }),
+  );
+});
+
+test("each check's cut-offs come from thresholds.json; one it turns off is never marked", () => {
+  const rows = (p: number) => [blank, { t: p }, blank, { ɹ: 0.9 }, { iː: 0.9 }, blank];
+  const judge = (p: number, json: object) =>
+    judgeWords(framesOf(rows(p)), vocab, dictionary, [word("three", 6)], parseThresholds(json));
+  const raised = { contrasts: { th: { maybe: 0.8, sure: 0.95 } } };
+  expect(judge(0.75, raised)).toEqual([]);
+  expect(judge(0.9, raised)).toMatchObject([{ level: "maybe" }]);
+  expect(judge(0.96, raised)).toMatchObject([{ level: "sure" }]);
+  // Another check's cut-offs leave th at the defaults.
+  expect(judge(0.75, { contrasts: { "z-s": { maybe: 0.99 } } })).toMatchObject([
+    { level: "maybe" },
+  ]);
+  expect(judge(0.99, { contrasts: { th: { off: true } } })).toEqual([]);
 });

@@ -1,36 +1,52 @@
 /**
  * Which words of a piece were said with one of the accent features learners
- * are marked for. For each word, with its time in the piece (the piece's
- * `startMs`/`endMs`, `coach.ts`): the phones the model heard inside that time
- * (`ctc.ts`) are lined up with each of the word's pronunciations in the
- * dictionary (`align.ts`). A word is marked only when every pronunciation
- * has a substitution that is one of the accent features in `contrasts.ts`
- * (z to s, final devoicing, th for t/s/f/d, w and v, sh/ch/j/zh swaps) and
- * whose heard phone the model gave a posterior of at least
- * `MIN_HEARD_POSTERIOR`. Vowel differences, left-out and added sounds, other
- * swaps and `FUNCTION_WORDS` are ignored: on 13 Speech Accent Archive
- * speakers (5 German, 5 Swedish, 3 native English) those flagged natives as
- * often as learners. The surest such sound is the mark's.
- *
- * These rules and `MIN_HEARD_POSTERIOR` are the ones that benchmark settled
- * on: do not retune them without running it again.
+ * are marked for. The piece's words are aligned over the model's output as
+ * one sentence (`force-align.ts`), each as the pronunciation the audio fits
+ * best; Parakeet's word times (the piece's `startMs`/`endMs`, `coach.ts`)
+ * only bound where a word may go. Then, phone by phone of that pronunciation,
+ * the phones the model heard there (`ctc.ts`, a few frames either side
+ * allowed) are looked at: a phone heard as another that is one of the accent
+ * features in `contrasts.ts` (z to s, final devoicing, th for t/s/f/d, w and
+ * v, sh/ch/j/zh swaps) is a candidate (`candidatesOf`). It is marked when the
+ * model's posterior for the heard phone reaches its check's cut-off
+ * (`thresholds.ts`), the expected phone itself was not heard there too, and
+ * no other accepted pronunciation of the word has the heard phone in that
+ * place, so a British or American way of saying it never counts. Vowel
+ * differences, left-out and added sounds, other swaps and `FUNCTION_WORDS`
+ * are ignored: on 13 Speech Accent Archive speakers (5 German, 5 Swedish, 3
+ * native English) those flagged natives as often as learners. The surest such
+ * sound is the mark's.
  */
 
-import { alignPhones, type Step } from "./align";
-import { accentContrast, type Contrast, plainFix } from "./contrasts";
+import { alignPhones } from "./align";
+import { accentContrast, type ContrastId, contrastId, plainFix, swapsFrom } from "./contrasts";
 import { greedyTokens, type HeardToken, type Posteriors, probAt } from "./ctc";
-import { type Dictionary, stressOf, wordKey } from "./dictionary";
-import { splitHeard } from "./phones";
+import { type Dictionary, sourceOf, stressOf, wordKey } from "./dictionary";
+import {
+  type AlignedPhone,
+  type AlignedWord,
+  type Alignment,
+  forceAlign,
+  type PhoneSet,
+  phoneSetOf,
+} from "./force-align";
+import { samePhone, splitHeard } from "./phones";
 import { respellPair } from "./respell";
+import {
+  cutOf,
+  levelAt,
+  MIN_HEARD_POSTERIOR,
+  NO_THRESHOLDS,
+  SURE_POSTERIOR,
+  type Thresholds,
+} from "./thresholds";
+
+export { MIN_HEARD_POSTERIOR, SURE_POSTERIOR };
 
 /** Audio samples per model frame: wav2vec2's 20 ms at 16 kHz. */
 export const SAMPLES_PER_FRAME = 320;
-/** The heard phone's highest probability over its frames must reach this for a substitution to count. */
-export const MIN_HEARD_POSTERIOR = 0.7;
-/** From this posterior up a mark is "sure"; from `MIN_HEARD_POSTERIOR` to just under it, "maybe". */
-export const SURE_POSTERIOR = 0.88;
-/** Model frames (20 ms) a word's time is widened by on each side: Parakeet's frames are 80 ms, and a token comes at or after its sound. */
-export const WORD_SLACK_FRAMES = 2;
+/** Frames a phone's look for what was heard reaches past its own frames, on each side, short of the next phone's. */
+export const SPILL_FRAMES = 3;
 
 /** Words never marked: said weak or fast by natives and learners alike, so their edits say nothing about an accent. */
 export const FUNCTION_WORDS: ReadonlySet<string> = new Set(
@@ -44,7 +60,7 @@ export const FUNCTION_WORDS: ReadonlySet<string> = new Set(
 /** A word to check: as it is to be said (`word`), and its samples in the piece's audio. */
 export type JudgeWord = { word: string; from: number; to: number };
 
-/** A word said otherwise: which of the words asked about (`index`), the phones heard and expected, the sound, how sure the model was (`posterior`), and for the reader the word respelt as heard (`said`) and as it should be said (`say`, `respell.ts`) with one plain line on the fix. */
+/** A word said otherwise: which of the words asked about (`index`), the phones heard and expected, the sound, how sure the model was (`posterior`) and what that makes the mark (`level`), and for the reader the word respelt as heard (`said`) and as it should be said (`say`, `respell.ts`) with one plain line on the fix. */
 export type Judged = {
   index: number;
   word: string;
@@ -53,18 +69,16 @@ export type Judged = {
   sound: string;
   how: string;
   posterior: number;
+  level?: "sure" | "maybe" | undefined;
   said: string;
   say: string;
   fix: string;
 };
 
-/** How sure a mark with this posterior is: "sure" from `SURE_POSTERIOR`, "maybe" below it. */
+/** How sure a mark with this posterior is under the default cut-offs: "sure" from `SURE_POSTERIOR`, "maybe" below it. */
 export function levelOf(posterior: number): "sure" | "maybe" {
   return posterior >= SURE_POSTERIOR ? "sure" : "maybe";
 }
-
-/** A heard phone, from a token the model may have written as two (`splitHeard`). */
-type HeardPhone = { phone: string; id: number; from: number; to: number };
 
 /** The model's vocabulary: each token, by id. */
 export class Vocab {
@@ -82,111 +96,250 @@ export function vocabFrom(json: Record<string, number>): Vocab {
   return new Vocab(Array.from(tokens, (token) => token ?? "<unk>"));
 }
 
-/** An accent-feature substitution the model was sure of, with how sure and what to say of it, and where it is: the phone of the pronunciation at `at`, heard as `heard`. */
-type Finding = {
-  posterior: number;
-  contrast: Contrast;
-  fix: string;
-  at: number;
-  heard: string;
-  last: boolean;
+/** A word of the piece as looked up: its key, its pronunciations, and whether it is one that is judged at all. */
+export type WordEntry = {
+  key: string;
+  pronunciations: readonly (readonly string[])[];
+  judged: boolean;
 };
 
-/** The highest probability of the heard phone over its frames. */
-function heardPeak(post: Posteriors, heard: HeardPhone): number {
+/** A heard phone, from a token the model may have written as two (`splitHeard`). */
+export type HeardPhone = { phone: string; id: number; from: number; to: number };
+
+/** A piece read: its words looked up and aligned, and what the model heard, greedily, given to the aligned phone it was heard over. */
+export type ReadPiece = {
+  post: Posteriors;
+  set: PhoneSet;
+  entries: readonly WordEntry[];
+  alignment: Alignment;
+  /** Every aligned phone of the sentence in order. */
+  flat: readonly AlignedPhone[];
+  /** The phones heard over each of `flat`'s phones (`heardBy`). */
+  heard: ReadonlyMap<AlignedPhone, readonly HeardPhone[]>;
+};
+
+/**
+ * A swap the checks look at: the phone at `at` of the chosen pronunciation
+ * (`expected`) and a phone it may have been heard as (`heard`), with the
+ * heard phone's peak posterior around it (`posterior`), whether the model's
+ * greedy reading heard it there (`wasHeard`), whether it heard the expected
+ * phone there too (`expectedHeard`), and whether another accepted
+ * pronunciation of the word has the heard phone in that place
+ * (`variantAccepts`).
+ */
+export type Candidate = {
+  at: number;
+  expected: string;
+  heard: string;
+  id: ContrastId;
+  last: boolean;
+  posterior: number;
+  wasHeard: boolean;
+  expectedHeard: boolean;
+  variantAccepts: boolean;
+};
+
+/** `word` looked up: judged when it is no function word and Britfone has it. */
+function entryOf(word: string, dictionary: Dictionary): WordEntry {
+  const key = wordKey(word);
+  const pronunciations = dictionary.get(key) ?? [];
+  const judged =
+    !FUNCTION_WORDS.has(key) && pronunciations.some((said) => sourceOf(said) === "britfone");
+  return { key, pronunciations, judged };
+}
+
+/** The piece's words aligned over `post`; null when they cannot be (no frames, fewer frames than phones). */
+export function readPiece(
+  post: Posteriors,
+  vocab: Vocab,
+  dictionary: Dictionary,
+  words: readonly JudgeWord[],
+): ReadPiece | null {
+  const set = phoneSetOf(vocab.tokens);
+  const entries = words.map((word) => entryOf(word.word, dictionary));
+  const alignment = forceAlign(
+    post,
+    set,
+    words.map((word, at) => ({
+      variants: entries[at]?.pronunciations ?? [],
+      from: Math.floor(word.from / SAMPLES_PER_FRAME),
+      to: Math.ceil(word.to / SAMPLES_PER_FRAME),
+    })),
+  );
+  if (alignment === null) return null;
+  const flat = alignment.words.flatMap((word) => word?.phones ?? []);
+  return {
+    post,
+    set,
+    entries,
+    alignment,
+    flat,
+    heard: heardBy(greedyTokens(post, vocab.tokens), flat),
+  };
+}
+
+/** How many frames `token` and `phone` share; minus the frames between them when they share none. */
+function overlap(token: HeardToken, phone: AlignedPhone): number {
+  return Math.min(token.to, phone.to) - Math.max(token.from, phone.from);
+}
+
+/**
+ * Each heard token, split into its phones, given to the aligned phone it
+ * shares the most frames with; one heard over blanks only goes to the
+ * nearest phone within `SPILL_FRAMES`, else to none.
+ */
+function heardBy(
+  tokens: readonly HeardToken[],
+  flat: readonly AlignedPhone[],
+): Map<AlignedPhone, HeardPhone[]> {
+  const heard = new Map<AlignedPhone, HeardPhone[]>(flat.map((phone) => [phone, []]));
+  for (const token of tokens) {
+    let best: AlignedPhone | undefined;
+    let most = -SPILL_FRAMES - 1;
+    for (const phone of flat) {
+      const shared = overlap(token, phone);
+      if (shared > most) {
+        most = shared;
+        best = phone;
+      }
+    }
+    if (best === undefined) continue;
+    for (const phone of splitHeard(token.token)) heard.get(best)?.push({ ...token, phone });
+  }
+  return heard;
+}
+
+/** The frames `phone` looks at for a heard phone's peak: its own, `SPILL_FRAMES` more each side, never into a neighbour's. */
+function lookOf(read: ReadPiece, phone: AlignedPhone): [number, number] {
+  const at = read.flat.indexOf(phone);
+  const before = read.flat[at - 1]?.to ?? 0;
+  const after = read.flat[at + 1]?.from ?? read.post.frames;
+  return [Math.max(before, phone.from - SPILL_FRAMES), Math.min(after, phone.to + SPILL_FRAMES)];
+}
+
+/** The highest probability of token `id` over frames `from` to `to`. */
+function peakOf(post: Posteriors, id: number, from: number, to: number): number {
   let peak = 0;
-  for (let t = heard.from; t < heard.to; t++) peak = Math.max(peak, probAt(post, t, heard.id));
+  for (let t = Math.max(0, from); t < Math.min(post.frames, to); t++) {
+    peak = Math.max(peak, probAt(post, t, id));
+  }
   return peak;
 }
 
-/** A step's difference when it is a substitution in an accent feature that the model was sure of; null otherwise. Deletions and insertions never are. */
-function findingOf(
-  said: readonly string[],
-  step: Step,
-  heardPhones: readonly HeardPhone[],
-  post: Posteriors,
-): Finding | null {
-  if (step.kind !== "sub") return null;
-  const heard = heardPhones[step.heard];
-  if (heard === undefined) return null;
-  const last = step.expected === said.length - 1;
-  const contrast = accentContrast(said[step.expected] ?? "", heard.phone, last);
-  const fix = plainFix(said[step.expected] ?? "", heard.phone, last);
-  if (contrast === null || fix === null) return null;
-  const posterior = heardPeak(post, heard);
-  if (posterior < MIN_HEARD_POSTERIOR) return null;
-  return { posterior, contrast, fix, at: step.expected, heard: heard.phone, last };
-}
-
-/** The confident accent-feature differences of one pronunciation from what was heard. */
-function findings(
-  said: readonly string[],
-  heardPhones: readonly HeardPhone[],
-  post: Posteriors,
-): Finding[] {
-  const steps = alignPhones(
-    said,
-    heardPhones.map((h) => h.phone),
-  );
-  return steps.flatMap((step) => {
-    const found = findingOf(said, step, heardPhones, post);
-    return found === null ? [] : [found];
+/** Whether a pronunciation of the word other than `said` has `heard` where `said` has its phone `at`. */
+function otherHas(entry: WordEntry, said: readonly string[], at: number, heard: string): boolean {
+  return entry.pronunciations.some((other) => {
+    if (other === said) return false;
+    const step = alignPhones(said, other).find((one) => one.kind !== "ins" && one.expected === at);
+    if (step === undefined || step.kind === "del" || step.kind === "ins") return false;
+    return samePhone(other[step.heard] ?? "", heard);
   });
 }
 
-/** The phones heard inside frames `from` to `to`: each token whose middle falls there, split into its phones. */
-function heardIn(tokens: readonly HeardToken[], from: number, to: number): HeardPhone[] {
-  return tokens
-    .filter((token) => {
-      const middle = (token.from + token.to) / 2;
-      return middle >= from && middle < to;
-    })
-    .flatMap((token) => splitHeard(token.token).map((phone) => ({ ...token, phone })));
+/** The aligned word `index` of `read` with its chosen pronunciation; null when it was not aligned. */
+export function chosenOf(
+  read: ReadPiece,
+  index: number,
+): { word: AlignedWord; said: readonly string[] } | null {
+  const word = read.alignment.words[index];
+  const said = read.entries[index]?.pronunciations[word?.variant ?? -1];
+  if (word === null || word === undefined || said === undefined) return null;
+  return { word, said };
 }
 
-/** One word's mark, or null when it was said as written, or cannot be judged. */
+/** Every swap the checks look at in word `index`, whatever its posterior. */
+export function candidatesOf(read: ReadPiece, index: number): Candidate[] {
+  const chosen = chosenOf(read, index);
+  const entry = read.entries[index];
+  if (chosen === null || entry === undefined) return [];
+  const { word, said } = chosen;
+  return word.phones.flatMap((phone, at): Candidate[] => {
+    const expected = said[at] ?? phone.phone;
+    const last = at === said.length - 1;
+    const swaps = swapsFrom(expected, last);
+    if (swaps.length === 0) return [];
+    const look = lookOf(read, phone);
+    const heard = read.heard.get(phone) ?? [];
+    const expectedHeard = heard.some((one) => samePhone(one.phone, expected));
+    return swaps.flatMap((swap): Candidate[] => {
+      const id = contrastId(expected, swap, last);
+      const token = read.set.idOf(swap);
+      if (id === null || token < 0) return [];
+      const tokens = heard.filter((one) => one.phone === swap);
+      let posterior = peakOf(read.post, token, look[0], look[1]);
+      for (const one of tokens)
+        posterior = Math.max(posterior, peakOf(read.post, token, one.from, one.to));
+      return [
+        {
+          at,
+          expected,
+          heard: swap,
+          id,
+          last,
+          posterior,
+          wasHeard: tokens.length > 0,
+          expectedHeard,
+          variantAccepts: otherHas(entry, said, at, swap),
+        },
+      ];
+    });
+  });
+}
+
+/** Whether `candidate` is marked under `thresholds`. */
+export function marks(candidate: Candidate, thresholds: Thresholds): boolean {
+  const cut = cutOf(thresholds, candidate.id);
+  return (
+    !cut.off &&
+    candidate.wasHeard &&
+    !candidate.expectedHeard &&
+    !candidate.variantAccepts &&
+    candidate.posterior >= cut.maybe
+  );
+}
+
+/** The phones heard over `word`'s phones, joined. */
+function heardOver(read: ReadPiece, word: AlignedWord): string {
+  return word.phones
+    .flatMap((phone) => read.heard.get(phone) ?? [])
+    .map((one) => one.phone)
+    .join("");
+}
+
+/** One word's mark, or null when it was said as written, or is not judged. */
 function judgeWord(
-  word: JudgeWord,
+  read: ReadPiece,
   index: number,
-  tokens: readonly HeardToken[],
-  post: Posteriors,
-  dictionary: Dictionary,
+  word: JudgeWord,
+  thresholds: Thresholds,
 ): Judged | null {
-  const key = wordKey(word.word);
-  if (FUNCTION_WORDS.has(key)) return null;
-  const pronunciations = dictionary.get(key);
-  if (pronunciations === undefined) return null;
-  const from = Math.max(0, Math.floor(word.from / SAMPLES_PER_FRAME) - WORD_SLACK_FRAMES);
-  const to = Math.min(post.frames, Math.ceil(word.to / SAMPLES_PER_FRAME) + WORD_SLACK_FRAMES);
-  const heard = heardIn(tokens, from, to);
-  if (heard.length === 0) return null;
-  let chosen: { said: readonly string[]; finding: Finding } | null = null;
-  for (const said of pronunciations) {
-    const found = findings(said, heard, post);
-    if (found.length === 0) return null;
-    const surest = found.reduce((a, b) => (b.posterior > a.posterior ? b : a));
-    if (chosen === null || surest.posterior < chosen.finding.posterior)
-      chosen = { said, finding: surest };
-  }
+  if (read.entries[index]?.judged !== true) return null;
+  const chosen = chosenOf(read, index);
   if (chosen === null) return null;
-  const { finding } = chosen;
+  const found = candidatesOf(read, index).filter((one) => marks(one, thresholds));
+  if (found.length === 0) return null;
+  const surest = found.reduce((a, b) => (b.posterior > a.posterior ? b : a));
+  const contrast = accentContrast(surest.expected, surest.heard, surest.last);
+  const fix = plainFix(surest.expected, surest.heard, surest.last);
+  if (contrast === null || fix === null) return null;
   const { said, say } = respellPair(
     chosen.said,
     stressOf(chosen.said),
-    finding.at,
-    finding.heard,
-    finding.last,
+    surest.at,
+    surest.heard,
+    surest.last,
   );
   return {
     index,
     word: word.word,
-    heard: heard.map((h) => h.phone).join(""),
+    heard: heardOver(read, chosen.word),
     expected: chosen.said.join(""),
-    ...finding.contrast,
-    posterior: finding.posterior,
+    ...contrast,
+    posterior: surest.posterior,
+    level: levelAt(surest.posterior, cutOf(thresholds, surest.id)),
     said,
     say,
-    fix: finding.fix,
+    fix,
   };
 }
 
@@ -196,10 +349,12 @@ export function judgeWords(
   vocab: Vocab,
   dictionary: Dictionary,
   words: readonly JudgeWord[],
+  thresholds: Thresholds = NO_THRESHOLDS,
 ): Judged[] {
-  const tokens = greedyTokens(post, vocab.tokens);
+  const read = readPiece(post, vocab, dictionary, words);
+  if (read === null) return [];
   return words.flatMap((word, index) => {
-    const judged = judgeWord(word, index, tokens, post, dictionary);
+    const judged = judgeWord(read, index, word, thresholds);
     return judged === null ? [] : [judged];
   });
 }

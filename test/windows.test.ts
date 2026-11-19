@@ -44,6 +44,7 @@ test("the worker's arguments reach it intact through a path with spaces, quotes 
     model: 'C:\\Users\\Jimmy "J" Engelbrecht\\AppData\\Local\\prifly\\host\\models\\m.onnx\\',
     vocab: "C:\\Users\\Åsa Öberg\\vocab.json",
     dictionary: "\\\\server\\share\\a b\\britfone.csv",
+    cmudict: "C:\\Users\\Åsa Öberg\\cmudict.dict",
     threads: 4,
   };
   expect(decodeArgs(encodeArgs(args))).toEqual(args);

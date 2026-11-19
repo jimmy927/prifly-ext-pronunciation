@@ -17,7 +17,8 @@ The respellings (`pronounce/respell.ts`) are plain English, not IPA: the
 stressed syllable in capitals, syllables joined by "-", and the swapped sound
 doubled where it stands alone after a vowel (BROW-sser to BROW-zzer, THEESS to
 THEEZZ). A mark is "sure" when the model gave the heard phone a posterior of at
-least 0.88, and "maybe" from 0.70 up to that.
+least 0.88, and "maybe" from 0.70 up to that, unless `pronounce/data/thresholds.json`
+(from `tools/calibrate`) sets other cut-offs for that check.
 
 Settings → Extensions → Pronunciation → Underline picks which are drawn:
 "Sure mistakes only" (the default), "Sure and not sure", or "Off" (nothing is
@@ -75,10 +76,17 @@ says it has no reference. `pronounce/play-shim.ts` holds the types of
 
 Only substitutions that are accent features: z to s, a final voiced consonant
 gone voiceless, th said as t, s, f, d or z, w and v for each other, and sh, ch,
-j, zh for one another. A word is marked only if every dictionary pronunciation
-has such a substitution and the model gave the heard phone a posterior of at
-least 0.7. Vowel differences, left-out and added sounds and a list of function
-words are never marked.
+j, zh for one another. The piece's words are first aligned over the model's
+output as one sentence (`pronounce/force-align.ts`, a CTC forced alignment), each
+as the pronunciation the audio fits best, so Parakeet's word times, off by up to
+440 ms, only bound where a word may go. A phone of that pronunciation is marked
+when the model heard such a substitution there with a posterior of at least 0.7
+(or its check's cut-off in `pronounce/data/thresholds.json`, where a check can
+also be `"off"`), did not hear the expected phone there too, and no other
+accepted pronunciation of the word (Britfone's British, CMUdict's American) has
+the heard phone in that place. Only words Britfone has are judged. Vowel
+differences, left-out and added sounds and a list of function words are never
+marked.
 
 These rules come from a benchmark on 13 Speech Accent Archive speakers (5
 German, 5 Swedish, 3 native English), where every other kind of edit was as
@@ -92,6 +100,7 @@ On first enable, into `<prifly data>/models/` (no account or key needed):
 | ------------------------------------------------------------------- | ----------------------------------------------------------------------------------------------- | ---------- |
 | Phoneme model, wav2vec2-lv-60-espeak-cv-ft, uint8 (Apache-2.0)      | `onnx-community/wav2vec2-lv-60-espeak-cv-ft-ONNX`, `onnx/model_quantized.onnx` and `vocab.json` | 318 MB     |
 | Britfone 3.0.1 pronouncing dictionary (MIT), with its `LICENSE.txt` | `JoseLlarena/Britfone` on GitHub                                                                | under 1 MB |
+| CMUdict, American pronunciations (BSD-2-Clause), with its `LICENSE` | `cmusphinx/cmudict` on GitHub                                                                   | 3.6 MB     |
 
 Each file is pinned to a revision and a sha256 (`pronounce/models.ts`) and only
 gets its name once the hash matched. The status line in Settings → Extensions
@@ -236,5 +245,7 @@ memory and 4 cores, so run it deliberately, on a machine with room:
 | `pronounce/download.ts`, `models.ts`                                                                        | The sha256-pinned downloader and what it fetches                    |
 | `pronounce/worker.ts`, `serve.ts`, `phone-model.ts`, `engine.ts`, `lifetime.ts`                             | The worker process                                                  |
 | `pronounce/worker-pipe.ts`, `calls.ts`, `protocol.ts`, `pcm.ts`                                             | How the extension and the worker talk                               |
-| `pronounce/judge.ts`, `contrasts.ts`, `align.ts`, `ctc.ts`, `phones.ts`, `dictionary.ts`, `not-mistakes.ts` | The judging, unchanged in its rules                                 |
+| `pronounce/judge.ts`, `contrasts.ts`, `align.ts`, `ctc.ts`, `phones.ts`, `dictionary.ts`, `not-mistakes.ts` | The judging                                                         |
+| `pronounce/force-align.ts`, `thresholds.ts`, `gop.ts`, `pitch.ts`                                           | Sentence alignment, the checks' cut-offs, phone goodness and pitch  |
+| `tools/calibrate/`                                                                                          | Measures natives and learners on a rented box (its `README.md`)     |
 | `test/`                                                                                                     | Tests over fakes                                                    |

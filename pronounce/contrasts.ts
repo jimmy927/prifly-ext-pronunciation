@@ -93,6 +93,33 @@ export function accentContrast(expected: string, heard: string, last: boolean): 
   return { sound: `${phoneName(expected)} → ${phoneName(heard)}`, how };
 }
 
+/**
+ * The five checks, as `pronounce/data/thresholds.json` names them: each has
+ * its own posterior cut-offs, measured on native speech (`thresholds.ts`).
+ */
+export const CONTRAST_IDS = ["z-s", "final-devoicing", "th", "w-v", "sh-ch"] as const;
+export type ContrastId = (typeof CONTRAST_IDS)[number];
+
+/** Which check `expected` heard as `heard` belongs to (`last`: the word's last phone); null when it is none. */
+export function contrastId(expected: string, heard: string, last: boolean): ContrastId | null {
+  if (last && FINAL_DEVOICING[expected] === heard) return "final-devoicing";
+  if (ACCENT_SWAPS[`${expected}>${heard}`] === undefined) return null;
+  if (expected === "z" || expected === "ʒ") return heard === "s" || heard === "ʃ" ? "z-s" : "sh-ch";
+  if (expected === "θ" || expected === "ð") return "th";
+  if (expected === "w" || expected === "v") return "w-v";
+  return "sh-ch";
+}
+
+/** Every phone `expected` may be heard as that is one of the accent features. */
+export function swapsFrom(expected: string, last: boolean): string[] {
+  const heard = Object.keys(ACCENT_SWAPS)
+    .filter((key) => key.startsWith(`${expected}>`))
+    .map((key) => key.slice(expected.length + 1));
+  const devoiced = FINAL_DEVOICING[expected];
+  if (last && devoiced !== undefined && !heard.includes(devoiced)) heard.push(devoiced);
+  return heard;
+}
+
 /** A sound as a plain reader writes it, with the word it sounds like where the letters alone do not say it. */
 const LETTERS: Record<string, string> = {
   θ: "TH (as in thin)",

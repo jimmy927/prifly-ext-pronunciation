@@ -13,7 +13,7 @@ import { type FakeWorker, fakeWorker, until } from "./fake-worker";
 // The module is what prifly imports: it must fit the contract as a whole.
 const module: ExtensionModule = extension;
 const ROOT = join(import.meta.dir, "..");
-const FILES = { model: "/m", vocab: "/v", dictionary: "/d" };
+const FILES = { model: "/m", vocab: "/v", dictionary: "/d", cmudict: "/c" };
 
 let running: Started | undefined;
 afterEach(() => running?.stop());
