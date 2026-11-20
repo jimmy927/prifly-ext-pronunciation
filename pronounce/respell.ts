@@ -139,6 +139,16 @@ function consonantLetters(phone: string): string {
   return CONSONANTS[phone] ?? "";
 }
 
+/** Whether `phone` is an English consonant these respellings have letters for. */
+export function spellsConsonant(phone: string): boolean {
+  return consonantLetters(phone) !== "";
+}
+
+/** Whether `phone` is a vowel these respellings have letters for. */
+export function spellsVowel(phone: string): boolean {
+  return phone === "ə" || (VOWELS[phone] ?? "") !== "";
+}
+
 /** One consonant as letters: a z outside the swap is "s", the swapped single letter doubled when `doubled`. */
 function spellConsonant(spelling: Spelling, at: number): string {
   const phone = spelling.phones[at] ?? "";

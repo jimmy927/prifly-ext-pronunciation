@@ -1,5 +1,6 @@
 import { expect, test } from "bun:test";
 import { AccentPanel } from "../pronounce/accent-panel";
+import { CHECK_IDS, type CheckId } from "../pronounce/checks";
 import { NO_BOX } from "../pronounce/extension";
 import {
   FLAGS,
@@ -13,7 +14,6 @@ import type { PastPiece } from "../pronounce/past-pieces";
 import { MARKS, Personal } from "../pronounce/personal";
 import { AccentProfile } from "../pronounce/profile";
 import type { ScanAnswer, ScanWorker } from "../pronounce/scan-worker";
-import type { CheckId } from "../pronounce/thresholds";
 import type { Wav } from "../pronounce/wav";
 import { much, natives } from "./accent-fixtures";
 import { fakeState } from "./fake-api";
@@ -102,7 +102,8 @@ function setup(
     read: options.read ?? (async () => ({ full: FULL, audio: new Float32Array(16_000) })),
     worker: options.worker ?? (async () => scan.worker),
     natives: () => natives(),
-    shipped: () => new Set<CheckId>(["z-s"]),
+    // Every switch on but TH's.
+    switchedOn: () => new Set<CheckId>(CHECK_IDS.filter((id) => id !== "th")),
     voice: {
       yours: async (clip) => {
         played.push({ which: "yours", rate: clip.rate, length: clip.samples.length });
@@ -156,7 +157,7 @@ test("before any job: Score is on, Cancel and Reset are off, and every check is 
     state: "idle",
     done: 0,
     total: 0,
-    line: `Scores your last ${SCAN_PIECES} English sentences with every check, the ones that are off too. Mark each flag Right or Wrong: a check you agree with gets switched on for you.`,
+    line: `Scores your last ${SCAN_PIECES} English sentences with every check, the ones switched off too. Mark each flag Right or Wrong: each check's tally shows how often it was wrong for you, and which switch in Settings → Extensions → Pronunciation turns it off.`,
   });
   expect([view.canStart, view.canCancel, view.canReset]).toEqual([true, false, false]);
   expect(view.checks.map((one) => one.id)).toEqual([
@@ -165,14 +166,33 @@ test("before any job: Score is on, Cancel and Reset are off, and every check is 
     "th",
     "w-v",
     "sh-ch",
+    "any-sound",
     "stress",
     "vowel-patterns",
+    "weak-vowels",
   ]);
-  expect(checkOf(view, "z-s")).toMatchObject({ shipped: true, result: "few", flags: [] });
+  expect(checkOf(view, "z-s")).toMatchObject({ title: "Z said as S", on: true, flags: [] });
   expect(checkOf(view, "th")).toMatchObject({
-    shipped: false,
-    line: "Not enough marks yet (0 of 15)",
+    on: false,
+    marked: 0,
+    line: "Not marked yet. Off: switch on “TH said as T, D, S or F” in Settings → Extensions → Pronunciation to underline it again.",
   });
+});
+
+test("each check's tally counts Wrong here and Not a mistake in the session alike, beside the switch that turns it off", async () => {
+  const { check, ask, scan, personal } = setup({ pieces: 1 });
+  await ask("flags/start", {});
+  await scan.answer(answerOf(0.9));
+  await check.settled();
+  await ask("flags/mark", { id: "2026-11-20/120000-d0-0#1#stress", verdict: "right" });
+  // "Not a mistake" on a stress underline in the session (coach.ts).
+  await personal.mark("session#s1#d1#0##6#stress", "wrong", "stress", 1.3);
+  await personal.mark("session#s1#d1#1##6#stress", "wrong", "stress", 1.5);
+  const stress = checkOf(await ask("flags"), "stress");
+  expect(stress).toMatchObject({ on: true, marked: 3, right: 1, wrong: 2 });
+  expect(stress?.line).toBe(
+    "2 of 3 not a mistake. Too many? Switch off “Word stress” in Settings → Extensions → Pronunciation.",
+  );
 });
 
 test("a job scores the pieces one at a time and says how far it is and how long is left", async () => {
@@ -221,7 +241,7 @@ test("every check's candidates are kept, the ones that are off too, worst first,
   expect(view.job).toMatchObject({ state: "done", line: "Scored 2 sentences: 6 flags" });
   expect([view.canStart, view.canCancel]).toEqual([true, false]);
   const th = checkOf(view, "th");
-  expect(th?.shipped).toBe(false);
+  expect(th?.on).toBe(false);
   expect(th?.flags.map((one) => one.score)).toEqual(["0.93", "0.60"]);
   expect(th?.flags[0]).toEqual({
     id: "2026-11-20/120001-d1-0#0#th",
@@ -281,7 +301,7 @@ test("a job stopped early is read back as stopped, one that finished as done", a
     read: async () => ({ full: FULL, audio: new Float32Array(0) }),
     worker: async () => fakeScanWorker().worker,
     natives: () => null,
-    shipped: () => new Set(),
+    switchedOn: () => new Set(),
     voice: null,
     sayRight: () => null,
     log: () => undefined,
@@ -369,8 +389,8 @@ test("marks are the reader's, changeable, counted per check, and kept when the s
   );
 });
 
-test("15 Right marks switch a check on for the reader at their cut-off; mostly Wrong turns it off", async () => {
-  const { check, ask, scan } = setup({ pieces: 20 });
+test("marks only tally: a check marked Wrong throughout stays as its switch says, and nothing else is kept", async () => {
+  const { check, ask, scan, documents } = setup({ pieces: 20 });
   await ask("flags/start", {});
   for (let k = 0; k < 20; k++) await scan.answer(answerOf(0.99 - k / 100));
   await check.settled();
@@ -382,13 +402,12 @@ test("15 Right marks switch a check on for the reader at their cut-off; mostly W
   }
   for (const flag of stress) await ask("flags/mark", { id: flag.id, verdict: "wrong" });
   view = await ask("flags");
-  expect(checkOf(view, "th")).toMatchObject({
-    result: "on",
-    line: "On for you from score 0.80 (16 of 20 right)",
-    marked: 20,
-    right: 16,
-  });
-  expect(checkOf(view, "stress")).toMatchObject({ result: "off", line: "Off: only 0 of 20 right" });
+  expect(checkOf(view, "th")).toMatchObject({ on: false, marked: 20, right: 16, wrong: 4 });
+  expect(checkOf(view, "stress")).toMatchObject({ on: true, marked: 20, right: 0, wrong: 20 });
+  expect(checkOf(view, "stress")?.line).toBe(
+    "20 of 20 not a mistake. Too many? Switch off “Word stress” in Settings → Extensions → Pronunciation.",
+  );
+  expect([...documents.keys()].sort()).toEqual([FLAGS, MARKS].sort());
 });
 
 test("Yours plays the word cut from the piece's full-rate audio; Say it right needs the box; a deleted recording says so", async () => {

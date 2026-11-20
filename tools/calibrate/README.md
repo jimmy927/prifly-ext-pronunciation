@@ -2,8 +2,9 @@
 
 Measures how the extension's phoneme model hears native and learner speech, and writes:
 
-- `pronounce/data/thresholds.json`: each check's cut-offs (`maybe`, `sure`) and whether it ships (`off`).
-  The extension reads it at the worker's start (`pronounce/thresholds.ts`).
+- `pronounce/data/thresholds.json`: each check's cut-offs (`maybe`, `sure`), every one written
+  `"off": false` (the reader's switch in Settings decides what is drawn), with the learners'
+  precision in `why`. The extension reads it at the worker's start (`pronounce/thresholds.ts`).
 - `pronounce/data/native-stats.json`: per phone and per vowel, the natives' goodness (LPR)
   percentiles and vowel lengths; the natives' stress margins (length, loudness, pitch).
 - `tools/calibrate/report.md`: every number behind both, per check and per corpus.
@@ -22,13 +23,17 @@ The steps (`run.py` runs all three, each resumable):
 2. `dump.ts`: the extension's own pinned model (uint8 wav2vec2-lv-60-espeak, through the
    worker's `openPhoneModel`) and dictionaries (Britfone + CMUdict, fetched by
    `pronounce/models.ts` into `WORK/models`), one JSON line per word: chosen pronunciation,
-   per-phone goodness, per-vowel stress cues, and the swaps the checks look at.
+   per-phone goodness, per-vowel stress cues, the swaps the checks look at, and the consonants
+   and weak vowels any other swapped sound and unreduced vowels look at (`anySound`,
+   `weakVowels`).
 3. `stats.py`: natives decide each check's cut-off (at most 1 flag per 200 judged words for
-   `maybe`, 1 per 1000 for `sure`); learners decide whether it ships (precision ≥ 0.80 on at
-   least 20 labelled flags, else `off: true`). Word stress (`stress`) the same way, per cue
-   combination on the lead `pronounce/stress.ts` measures, with speechocean762's word stress
-   scores as the learner labels; without them (labels.jsonl written before fetch.py kept
-   them) it stays `off`. To add them to a finished fetch, delete
+   `maybe`, 1 per 1000 for `sure`, never stricter than 0.70 / 0.88); learners' precision
+   (≥ 0.80 on at least 20 labelled flags is the bar) is reported, and switches nothing. Word
+   stress (`stress`) the same way, per cue combination on the lead `pronounce/stress.ts`
+   measures, with speechocean762's word stress scores as the learner labels. Any other
+   swapped sound and unreduced vowels: the native deviate a word's worst candidate must reach,
+   from the natives' 0.5th percentile down (a dump from before `anySound` and `weakVowels`
+   leaves them at the 0.5th and 0.1th percentile). To add stress labels to a finished fetch, delete
    `WORK/corpora/speechocean762/.done` and run the fetch step again (it rereads the kept
    archive and keeps the wavs already converted), then the stats step; the dump need not run again, though a new dump also writes
    `stressAccepts`, without which a lead to another accepted stress counts against natives.

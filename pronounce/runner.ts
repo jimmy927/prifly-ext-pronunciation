@@ -14,7 +14,7 @@ import { ShaMismatch } from "./download";
 import type { JudgeWord } from "./judge";
 import type { Fetching, PronounceFiles } from "./models";
 import { encodeFloats } from "./pcm";
-import { type Overrides, type PronounceArgs, PronounceLine } from "./protocol";
+import { type PronounceArgs, PronounceLine } from "./protocol";
 import type { Judgement } from "./scores";
 import type { WorkerPipe } from "./worker-pipe";
 
@@ -182,15 +182,10 @@ export class PronounceRunner {
   }
 
   /**
-   * The words of `audio` said otherwise, and its content words' scores; null while the worker is
-   * not ready, or when it could not say. `overrides`, the reader's own settings of the checks
-   * (`personal.ts`), beat `thresholds.json`'s.
+   * The words of `audio` said otherwise, by every check, and its content words' scores; null
+   * while the worker is not ready, or when it could not say.
    */
-  judge(
-    audio: Float32Array,
-    words: readonly JudgeWord[],
-    overrides?: Overrides,
-  ): Promise<Judgement | null> {
+  judge(audio: Float32Array, words: readonly JudgeWord[]): Promise<Judgement | null> {
     const { pipe } = this;
     if (this.state !== "ready" || pipe === null || words.length === 0) return Promise.resolve(null);
     // Only what the worker's strict request takes.
@@ -200,7 +195,6 @@ export class PronounceRunner {
       id,
       pcm: encodeFloats(audio),
       words: asked,
-      ...(overrides === undefined ? {} : { overrides }),
     }));
   }
 }

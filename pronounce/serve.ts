@@ -7,11 +7,22 @@
  */
 
 import { constants, setPriority } from "node:os";
+import { dirname, join } from "node:path";
+import { anySoundMarks } from "./any-sound";
 import { posteriors } from "./ctc";
 import { type Dictionary, mergeDictionaries, parseCmudict, parseDictionary } from "./dictionary";
 import { scanFlags } from "./flags";
-import { judgeWords, readPiece, type Vocab, vocabFrom } from "./judge";
+import {
+  contrastMarks,
+  inWordOrder,
+  type JudgeWord,
+  type ReadPiece,
+  readPiece,
+  type Vocab,
+  vocabFrom,
+} from "./judge";
 import { exitWhenOrphaned } from "./lifetime";
+import { loadNativeStats, type NativeStats } from "./native";
 import { decodeFloats } from "./pcm";
 import {
   type JudgeRequest,
@@ -20,9 +31,17 @@ import {
   type ScanRequest,
   WorkerRequest,
 } from "./protocol";
-import { scorePiece, scoresOfRead } from "./scores";
-import { loadStressCheck, type StressCheck, stressMarks, withStressOverride } from "./stress";
-import { loadThresholds, type Thresholds, withOverrides } from "./thresholds";
+import { scoresOfRead } from "./scores";
+import { loadStressCheck, type StressCheck, stressMarks } from "./stress";
+import {
+  type DeviateCuts,
+  deviateCutOf,
+  loadDeviateCuts,
+  loadThresholds,
+  THRESHOLDS_PATH,
+  type Thresholds,
+} from "./thresholds";
+import { weakVowelMarks } from "./weak-vowels";
 
 /** What the worker needs of the model: logits per frame for normalised 16 kHz audio. */
 export type PhoneModel = {
@@ -38,8 +57,12 @@ export type Loaded = {
   thresholds: Thresholds;
   /** Word stress (`stress.ts`); null while the calibration files do not turn it on. */
   stress: StressCheck | null;
-  /** Word stress read even where the file has it off: for the reader's own cut-off and the scan's flags; null without its data. */
+  /** Word stress read even where the file has it off: for the scan's flags; null without its data. */
   stressAll: StressCheck | null;
+  /** The natives' statistics (`native.ts`), for any other swapped sound and unreduced vowels; null without the file. */
+  natives: NativeStats | null;
+  /** Those two checks' cut-offs on the natives' scale. */
+  deviateCuts: DeviateCuts;
 };
 
 /** `audio` scaled to zero mean and unit variance, as the model was trained on (`do_normalize`). */
@@ -53,11 +76,15 @@ export function normalised(audio: Float32Array): Float32Array {
   return audio.map((sample) => (sample - mean) * scale);
 }
 
-/** The model, `vocab.json`, Britfone and CMUdict as `args` names them, the checks' cut-offs (`thresholds.ts`) and word stress's (`stress.ts`, with `native-stats.json` beside `thresholds.json`). */
+/**
+ * The model, `vocab.json`, Britfone and CMUdict as `args` names them, the checks' cut-offs
+ * (`thresholds.ts`), word stress's (`stress.ts`) and the natives' statistics (`native.ts`), both
+ * from `native-stats.json` beside `thresholds.json`.
+ */
 export async function loadAll(
   args: PronounceArgs,
   open: OpenModel,
-  thresholdsPath?: string,
+  thresholdsPath: string = THRESHOLDS_PATH,
 ): Promise<Loaded> {
   const json = (await Bun.file(args.vocab).json()) as Record<string, number>;
   const dictionary = mergeDictionaries(
@@ -67,32 +94,52 @@ export async function loadAll(
   const thresholds = await loadThresholds(thresholdsPath);
   const stress = await loadStressCheck(thresholdsPath);
   const stressAll = await loadStressCheck(thresholdsPath, undefined, true);
+  const natives = await loadNativeStats(join(dirname(thresholdsPath), "native-stats.json"), (why) =>
+    process.stderr.write(`pronounce: native-stats.json ignored: ${why}\n`),
+  );
+  const deviateCuts = await loadDeviateCuts(thresholdsPath);
   const model = await open(args.model, args.threads);
-  return { model, vocab: vocabFrom(json), dictionary, thresholds, stress, stressAll };
+  return {
+    model,
+    vocab: vocabFrom(json),
+    dictionary,
+    thresholds,
+    stress,
+    stressAll,
+    natives,
+    deviateCuts,
+  };
 }
 
 /**
- * One request's marks and the accent profile's scores (`scores.ts`), or its failure as an
- * `error` line for its id. The reader's own settings in `request.overrides` (`personal.ts`)
- * beat `thresholds.json`'s for the checks they name.
+ * Every check's marks of a piece already read (`checks.ts`), at most one a word per check, in
+ * the order the coach draws them in; the vowels' are the extension's (`vowels.ts`).
  */
+export function marksOfRead(
+  read: ReadPiece,
+  words: readonly JudgeWord[],
+  audio: Float32Array,
+  loaded: Pick<Loaded, "thresholds" | "stress" | "natives" | "deviateCuts">,
+) {
+  const { stress, natives, deviateCuts } = loaded;
+  return inWordOrder([
+    ...contrastMarks(read, words, loaded.thresholds),
+    ...anySoundMarks(read, words, natives, deviateCutOf(deviateCuts, "any-sound")),
+    ...(stress === null ? [] : stressMarks(read, words, audio, stress)),
+    ...weakVowelMarks(read, words, natives, deviateCutOf(deviateCuts, "weak-vowels")),
+  ]);
+}
+
+/** One request's marks and the accent profile's scores (`scores.ts`), or its failure as an `error` line for its id. */
 export async function answerJudge(request: JudgeRequest, loaded: Loaded): Promise<PronounceLine> {
   const started = performance.now();
   try {
     const audio = decodeFloats(request.pcm);
     const out = await loaded.model.logits(normalised(audio));
     const post = posteriors(out.data, out.frames, out.size);
-    const own = request.overrides;
-    const stress = withStressOverride(loaded.stress, loaded.stressAll, own?.stress);
-    const marks = judgeWords(
-      post,
-      loaded.vocab,
-      loaded.dictionary,
-      request.words,
-      withOverrides(loaded.thresholds, own?.contrasts),
-      stress === null ? undefined : (read) => stressMarks(read, request.words, audio, stress),
-    );
-    const scores = scorePiece(post, loaded.vocab, loaded.dictionary, request.words);
+    const read = readPiece(post, loaded.vocab, loaded.dictionary, request.words);
+    const marks = read === null ? [] : marksOfRead(read, request.words, audio, loaded);
+    const scores = read === null ? [] : scoresOfRead(read);
     return { type: "marks", id: request.id, marks, scores, ms: performance.now() - started };
   } catch (caught) {
     return { type: "error", id: request.id, message: String(caught) };
@@ -107,7 +154,12 @@ export async function answerScan(request: ScanRequest, loaded: Loaded): Promise<
     const out = await loaded.model.logits(normalised(audio));
     const post = posteriors(out.data, out.frames, out.size);
     const read = readPiece(post, loaded.vocab, loaded.dictionary, request.words);
-    const flags = read === null ? [] : scanFlags(read, request.words, audio, loaded.stressAll);
+    const checks = {
+      stress: loaded.stressAll,
+      natives: loaded.natives,
+      cuts: loaded.deviateCuts,
+    };
+    const flags = read === null ? [] : scanFlags(read, request.words, audio, checks);
     const scores = read === null ? [] : scoresOfRead(read);
     return { type: "flags", id: request.id, flags, scores, ms: performance.now() - started };
   } catch (caught) {

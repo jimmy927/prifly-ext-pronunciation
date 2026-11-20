@@ -11,14 +11,16 @@
  * model's posterior for the heard phone reaches its check's cut-off
  * (`thresholds.ts`), the expected phone itself was not heard there too, and
  * no other accepted pronunciation of the word has the heard phone in that
- * place, so a British or American way of saying it never counts. Vowel
- * differences, left-out and added sounds, other swaps and `FUNCTION_WORDS`
- * are ignored: on 13 Speech Accent Archive speakers (5 German, 5 Swedish, 3
- * native English) those flagged natives as often as learners. The surest such
- * sound is the mark's.
+ * place, so a British or American way of saying it never counts. Left-out
+ * and added sounds and `FUNCTION_WORDS` are ignored: on 13 Speech Accent
+ * Archive speakers (5 German, 5 Swedish, 3 native English) those flagged
+ * natives as often as learners. Each check (`checks.ts`) marks a word at most
+ * once, with the surest such sound; the other checks (other swaps, word
+ * stress, vowels) are their own files' and come in through `MoreMarks`.
  */
 
 import { alignPhones } from "./align";
+import { CHECK_IDS, type CheckId, checkOfSwap } from "./checks";
 import { accentContrast, type ContrastId, contrastId, plainFix, swapsFrom } from "./contrasts";
 import { greedyTokens, type HeardToken, type Posteriors, probAt } from "./ctc";
 import { type Dictionary, sourceOf, stressOf, wordKey } from "./dictionary";
@@ -60,9 +62,10 @@ export const FUNCTION_WORDS: ReadonlySet<string> = new Set(
 /** A word to check: as it is to be said (`word`), and its samples in the piece's audio. */
 export type JudgeWord = { word: string; from: number; to: number };
 
-/** A word said otherwise: which of the words asked about (`index`), the phones heard and expected, the sound, how sure the model was (`posterior`) and what that makes the mark (`level`), and for the reader the word respelt as heard (`said`) and as it should be said (`say`, `respell.ts`) with one plain line on the fix. */
+/** A word said otherwise: which of the words asked about (`index`), the check that heard it (`checks.ts`), the phones heard and expected, the sound, how sure the model was (`posterior`) and what that makes the mark (`level`), and for the reader the word respelt as heard (`said`) and as it should be said (`say`, `respell.ts`) with the card's plain words on what was off and the fix (`fix`, starting with the check's name). */
 export type Judged = {
   index: number;
+  check: CheckId;
   word: string;
   heard: string;
   expected: string;
@@ -227,7 +230,12 @@ function peakOf(post: Posteriors, id: number, from: number, to: number): number 
 }
 
 /** Whether a pronunciation of the word other than `said` has `heard` where `said` has its phone `at`. */
-function otherHas(entry: WordEntry, said: readonly string[], at: number, heard: string): boolean {
+export function otherHas(
+  entry: WordEntry,
+  said: readonly string[],
+  at: number,
+  heard: string,
+): boolean {
   return entry.pronunciations.some((other) => {
     if (other === said) return false;
     const step = alignPhones(said, other).find((one) => one.kind !== "ins" && one.expected === at);
@@ -306,22 +314,18 @@ function heardOver(read: ReadPiece, word: AlignedWord): string {
     .join("");
 }
 
-/** One word's mark, or null when it was said as written, or is not judged. */
-function judgeWord(
+/** The mark of `surest`, the surest swap of its check in word `index`; null when it cannot be put in plain words. */
+function markOf(
   read: ReadPiece,
   index: number,
   word: JudgeWord,
+  surest: Candidate,
   thresholds: Thresholds,
 ): Judged | null {
-  if (read.entries[index]?.judged !== true) return null;
   const chosen = chosenOf(read, index);
-  if (chosen === null) return null;
-  const found = candidatesOf(read, index).filter((one) => marks(one, thresholds));
-  if (found.length === 0) return null;
-  const surest = found.reduce((a, b) => (b.posterior > a.posterior ? b : a));
   const contrast = accentContrast(surest.expected, surest.heard, surest.last);
   const fix = plainFix(surest.expected, surest.heard, surest.last);
-  if (contrast === null || fix === null) return null;
+  if (chosen === null || contrast === null || fix === null) return null;
   const { said, say } = respellPair(
     chosen.said,
     stressOf(chosen.said),
@@ -331,6 +335,7 @@ function judgeWord(
   );
   return {
     index,
+    check: checkOfSwap(surest.id, surest.expected),
     word: word.word,
     heard: heardOver(read, chosen.word),
     expected: chosen.said.join(""),
@@ -343,25 +348,51 @@ function judgeWord(
   };
 }
 
-/** The contrasts' marks of a piece already read (`readPiece`), at most one a word, in the words' order. */
+/** One word's marks, at most one per check (the surest swap of each), in `CHECK_IDS` order; none when it was said as written, or is not judged. */
+function judgeWord(
+  read: ReadPiece,
+  index: number,
+  word: JudgeWord,
+  thresholds: Thresholds,
+): Judged[] {
+  if (read.entries[index]?.judged !== true) return [];
+  const surest = new Map<CheckId, Candidate>();
+  for (const one of candidatesOf(read, index)) {
+    if (!marks(one, thresholds)) continue;
+    const check = checkOfSwap(one.id, one.expected);
+    const known = surest.get(check);
+    if (known === undefined || one.posterior > known.posterior) surest.set(check, one);
+  }
+  return CHECK_IDS.flatMap((check): Judged[] => {
+    const one = surest.get(check);
+    const mark = one === undefined ? null : markOf(read, index, word, one, thresholds);
+    return mark === null ? [] : [mark];
+  });
+}
+
+/** The contrasts' marks of a piece already read (`readPiece`), at most one a word per check, in the words' order. */
 export function contrastMarks(
   read: ReadPiece,
   words: readonly JudgeWord[],
   thresholds: Thresholds,
 ): Judged[] {
-  return words.flatMap((word, index) => {
-    const judged = judgeWord(read, index, word, thresholds);
-    return judged === null ? [] : [judged];
-  });
+  return words.flatMap((word, index) => judgeWord(read, index, word, thresholds));
 }
 
-/** Marks of another kind for a piece once read (word stress, `stress.ts`), handed in by the worker so this file needs none of their data. */
+/** Marks of another kind for a piece once read (other swaps, word stress, weak vowels), handed in by the worker so this file needs none of their data. */
 export type MoreMarks = (read: ReadPiece) => readonly Judged[];
 
+/** `marks` in the words' order, and within a word in `CHECK_IDS` order: the order the coach draws them in. */
+export function inWordOrder(marks: readonly Judged[]): Judged[] {
+  const rank = (one: Judged) => CHECK_IDS.indexOf(one.check);
+  return [...marks].sort((a, b) => a.index - b.index || rank(a) - rank(b));
+}
+
 /**
- * The marks for `words` of a piece whose model output is `post`: the
- * contrasts' (`judgeWord`), then `more`'s for the words none of those marked,
- * at most one mark a word, in the words' order.
+ * Every mark for `words` of a piece whose model output is `post`: the
+ * contrasts' (`judgeWord`) and `more`'s, at most one a word per check, in
+ * `inWordOrder`. A word marked by several checks keeps every mark: which is
+ * drawn is the reader's switches' (`coach.ts`).
  */
 export function judgeWords(
   post: Posteriors,
@@ -373,9 +404,5 @@ export function judgeWords(
 ): Judged[] {
   const read = readPiece(post, vocab, dictionary, words);
   if (read === null) return [];
-  const found = contrastMarks(read, words, thresholds);
-  if (more === undefined) return found;
-  const marked = new Set(found.map((one) => one.index));
-  const extra = more(read).filter((one) => !marked.has(one.index));
-  return [...found, ...extra].sort((a, b) => a.index - b.index);
+  return inWordOrder([...contrastMarks(read, words, thresholds), ...(more?.(read) ?? [])]);
 }

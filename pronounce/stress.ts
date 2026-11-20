@@ -223,7 +223,7 @@ function leadsOf(summary: Record<string, number | null>): NativeLeads {
  * The check from `thresholds.json`'s and `native-stats.json`'s JSON; null
  * (off) when the stress entry is missing or off, or no combination has both
  * a cut-off and the natives' leads. With `evenOff`, an entry that is off is
- * read too: the reader's own cut-off (`withStressOverride`) and the flags
+ * read too: the flags
  * they mark (`flags.ts`) need its natives' leads. Throws on JSON of another shape.
  */
 export function parseStressCheck(
@@ -286,13 +286,16 @@ function ordinal(at: number): string {
   return ORDINALS[at] ?? `${at + 1}th`;
 }
 
-/** The plain line on the fix, e.g. "You stressed the first syllable. Natives stress the second: …". */
+/** The card's first words: the check's name. */
+export const STRESS_HEAD = "Word stress.";
+
+/** The card, e.g. "Word stress. You stressed the first syllable; natives stress the second: …". */
 export function stressFix(say: string, stressed: number, winner: number): string {
   const syllables = say.split("-");
   const loud = (syllables[stressed] ?? "").toUpperCase();
   const quiet = (syllables[winner] ?? "").toUpperCase();
   return (
-    `You stressed the ${ordinal(winner)} syllable. Natives stress the ${ordinal(stressed)}: ` +
+    `${STRESS_HEAD} You stressed the ${ordinal(winner)} syllable; natives stress the ${ordinal(stressed)}: ` +
     `make ${loud} louder, longer and a little higher, and keep ${quiet} short.`
   ).slice(0, MAX_FIX);
 }
@@ -319,6 +322,7 @@ function stressMark(
   const syllables = say.split("-");
   return {
     index,
+    check: STRESS_ID,
     word,
     heard: said,
     expected: say,
@@ -355,27 +359,4 @@ export function stressMarks(
   check: StressCheck,
 ): Judged[] {
   return stressFound(read, words, audio, check).map((one) => one.mark);
-}
-
-/**
- * `check` with the reader's own cut-off over every combination's `maybe` (sure from the
- * file's, or from theirs when higher); null when they turned it off. `all` is the check read
- * even when the file has it off (`parseStressCheck`'s `evenOff`): with no override `shipped`
- * stays as it is.
- */
-export function withStressOverride(
-  shipped: StressCheck | null,
-  all: StressCheck | null,
-  override: { off: boolean; maybe: number } | undefined,
-): StressCheck | null {
-  if (override === undefined) return shipped;
-  if (override.off || all === null) return null;
-  const cuts: StressCheck["cuts"] = {};
-  for (const combo of COMBOS) {
-    const cut = all.cuts[combo];
-    if (cut !== undefined) {
-      cuts[combo] = { maybe: override.maybe, sure: Math.max(override.maybe, cut.sure) };
-    }
-  }
-  return { cuts, natives: all.natives };
 }

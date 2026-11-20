@@ -4,40 +4,36 @@
   "contrasts": {
     "z-s": {
       "off": false,
-      "maybe": 0.7,
-      "sure": 0.88,
-      "why": "ships by the reader's decision despite 55% precision on speechocean762's Mandarin learners (22 labelled flags, under the 80% bar); natives trigger it at 0.07% of words at 0.70 and 0.05% at 0.88"
-    },
-    "vowel-patterns": {
-      "off": true,
-      "why": "confirmed-pattern vowel underlines are measured but did not reach the 80% learner-precision bar, so they stay off; the accent profile and the Your accent panel still show from native-stats.json"
+      "maybe": 0.5,
+      "sure": 0.5,
+      "why": "natives: 0.07% of words at 0.50; learner precision 0.55 on 22 labelled flags (speechocean762's Mandarin learners)"
     },
     "final-devoicing": {
-      "off": true,
+      "off": false,
       "maybe": 0.5,
       "sure": 0.725,
-      "why": "precision 0.17 under 0.80"
+      "why": "natives: 0.15% of words at 0.50, 0.10% at 0.725; learner precision 0.17 on 411 labelled flags"
     },
     "th": {
-      "off": true,
+      "off": false,
       "maybe": 0.5,
       "sure": 0.5,
-      "why": "precision 0.15 under 0.80"
+      "why": "natives: 0.09% of words at 0.50; learner precision 0.15 on 372 labelled flags"
     },
     "w-v": {
-      "off": true,
+      "off": false,
       "maybe": 0.5,
       "sure": 0.5,
-      "why": "precision 0.09 under 0.80"
+      "why": "natives: 0.00% of words at 0.50; learner precision 0.09 on 115 labelled flags"
     },
     "sh-ch": {
-      "off": true,
+      "off": false,
       "maybe": 0.5,
       "sure": 0.5,
-      "why": "only 16 labelled learner flags (need 20)"
+      "why": "natives: 0.07% of words at 0.50; learner precision 0.13 on 16 labelled flags"
     },
     "stress": {
-      "off": true,
+      "off": false,
       "cuts": {
         "dur+rms+f0": {
           "maybe": 1.15,
@@ -48,7 +44,19 @@
           "sure": 1.8
         }
       },
-      "why": "precision 0.19 under 0.80"
+      "why": "learner precision 0.19 on 160 scored flags"
+    },
+    "any-sound": {
+      "off": false,
+      "maybe": -2.5758,
+      "sure": -3.0902,
+      "why": "not measured yet: the natives' 0.5th and 0.1th percentile per consonant until a calibration measures the rate per word"
+    },
+    "weak-vowels": {
+      "off": false,
+      "maybe": -2.5758,
+      "sure": -3.0902,
+      "why": "not measured yet: the natives' 0.5th and 0.1th percentile for schwa until a calibration measures the rate per word"
     }
   }
 }

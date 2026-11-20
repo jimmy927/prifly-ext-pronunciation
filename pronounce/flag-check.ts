@@ -2,8 +2,10 @@
  * "Check your flags" in the "Your accent" window: the reader's newest `SCAN_PIECES` English
  * sentences with full-rate audio (`past-pieces.ts`) scored in the background by a worker of its
  * own (`scan-worker.ts`, two threads, one piece at a time), every candidate flag of every check
- * kept (`flags.ts`), the checks that are off included; the reader marks each Right or Wrong, and
- * the marks set each check for them (`personal.ts`).
+ * kept (`flags.ts`), the ones switched off included; the reader marks each Right or Wrong
+ * (`personal.ts`). Per check the page shows how often the reader found it wrong, here and with
+ * "Not a mistake" in the session, beside the switch in Settings that turns it off
+ * (`checks.ts`): the marks themselves switch nothing.
  *
  * The flags are kept in `api.state` (`FLAGS`) with what is needed to play the word: the
  * recording's file, its rate and the word's times. A job can be cancelled; what it found so far
@@ -11,13 +13,13 @@
  */
 
 import { z } from "zod";
+import { CHECK_IDS, CHECK_LABELS, type CheckId } from "./checks";
 import { type Flag, vowelFlags } from "./flags";
 import type { NativeStats } from "./native";
 import type { PastPiece } from "./past-pieces";
-import { type Personal, type Result, resultLine, type Verdict } from "./personal";
+import type { Personal, Tally, Verdict } from "./personal";
 import { resample } from "./resample";
 import type { ScanAnswer, ScanWorker } from "./scan-worker";
-import { CHECK_IDS, type CheckId } from "./thresholds";
 import { PIECE_RATE, type Voice } from "./voice";
 import type { Wav } from "./wav";
 
@@ -32,16 +34,23 @@ const MAX_FAILED = 3;
 /** Samples a millisecond at 16 kHz. */
 const SAMPLES_PER_MS = PIECE_RATE / 1000;
 
-/** What each check is called on the page. */
-export const CHECK_TITLES: Record<CheckId, string> = {
-  "z-s": "Z said as S",
-  "final-devoicing": "Final B, D, G, V, Z said as P, T, K, F, S",
-  th: "TH said as T, S, F or D",
-  "w-v": "W and V swapped",
-  "sh-ch": "SH, CH, J and ZH swapped",
-  stress: "Word stress",
-  "vowel-patterns": "Vowels",
-};
+/** Where the reader finds the checks' switches. */
+export const WHERE_SWITCHES = "Settings → Extensions → Pronunciation";
+
+/**
+ * The line under a check's title: its tally (a Wrong here and a "Not a mistake" in the session
+ * count alike), and the hint naming the switch that turns it off, or on again: "9 of 14 not a
+ * mistake. Too many? Switch off “Final D said as T” in Settings → Extensions → Pronunciation."
+ */
+export function tallyLine(check: CheckId, tally: Tally, on: boolean): string {
+  const label = `“${CHECK_LABELS[check]}”`;
+  const marked =
+    tally.marked === 0 ? "Not marked yet." : `${tally.wrong} of ${tally.marked} not a mistake.`;
+  const hint = on
+    ? `Too many? Switch off ${label} in ${WHERE_SWITCHES}.`
+    : `Off: switch on ${label} in ${WHERE_SWITCHES} to underline it again.`;
+  return `${marked} ${hint}`;
+}
 
 const StoredFlag = z.object({
   id: z.string(),
@@ -93,14 +102,16 @@ export type FlagView = {
 
 export type CheckView = {
   id: CheckId;
+  /** Its name, the label of its switch in Settings. */
   title: string;
-  /** Whether `thresholds.json` ships it on. */
-  shipped: boolean;
-  /** "on", "off" or "few" (not enough marks) for this reader. */
-  result: Result["state"];
+  /** Whether its switch is on now. */
+  on: boolean;
+  /** The tally and the hint naming its switch (`tallyLine`). */
   line: string;
+  /** The reader's verdicts on it, here and with "Not a mistake" in the session. */
   marked: number;
   right: number;
+  wrong: number;
   flags: FlagView[];
 };
 
@@ -131,8 +142,8 @@ export type FlagCheckDeps = {
   /** The scoring worker, started; rejects when `signal` aborts first. */
   worker: (signal: AbortSignal) => Promise<ScanWorker>;
   natives: () => NativeStats | null;
-  /** The checks `thresholds.json` ships on. */
-  shipped: () => ReadonlySet<CheckId>;
+  /** The checks whose switch is on now (`checks.ts`'s `switchedOn`). */
+  switchedOn: () => ReadonlySet<CheckId>;
   voice: Pick<Voice, "yours" | "sayRight"> | null;
   /** Why "Say it right" cannot be made now; null when a voice box is set. */
   sayRight: () => string | null;
@@ -351,7 +362,7 @@ export class FlagCheck {
     await this.deps.personal.mark(id, verdict, flag.check, flag.score);
   }
 
-  /** Every mark cleared: each check as `thresholds.json` ships it. */
+  /** Every mark cleared, the "Not a mistake" ones of the session included. */
   reset(): Promise<void> {
     return this.deps.personal.reset();
   }
@@ -386,22 +397,19 @@ export class FlagCheck {
   /** The job and the flags as the page shows them. */
   view(): FlagsView {
     const { personal } = this.deps;
-    const results = personal.results().checks;
-    const shipped = this.deps.shipped();
+    const on = this.deps.switchedOn();
     const checks = CHECK_IDS.map((id): CheckView => {
       const flags = this.stored.flags
         .filter((one) => one.check === id)
         .sort((a, b) => b.score - a.score);
       const verdicts = flags.map((one) => personal.verdictOf(one.id));
-      const result = results[id];
+      const tally = personal.tally(id);
       return {
         id,
-        title: CHECK_TITLES[id],
-        shipped: shipped.has(id),
-        result: result?.state ?? "few",
-        line: resultLine(result),
-        marked: verdicts.filter((one) => one !== null).length,
-        right: verdicts.filter((one) => one === "right").length,
+        title: CHECK_LABELS[id],
+        on: on.has(id),
+        line: tallyLine(id, tally, on.has(id)),
+        ...tally,
         flags: flags.map((one, at) => ({
           id: one.id,
           word: one.word,
@@ -431,7 +439,7 @@ export class FlagCheck {
     const flags = plural(this.stored.flags.length, "flag");
     const lines: Record<JobState, () => string> = {
       idle: () =>
-        `Scores your last ${SCAN_PIECES} English sentences with every check, the ones that are off too. Mark each flag Right or Wrong: a check you agree with gets switched on for you.`,
+        `Scores your last ${SCAN_PIECES} English sentences with every check, the ones switched off too. Mark each flag Right or Wrong: each check's tally shows how often it was wrong for you, and which switch in ${WHERE_SWITCHES} turns it off.`,
       listing: () => "Finding your English recordings…",
       running: () => this.runningLine(),
       done: () => `Scored ${plural(done, "sentence")}: ${flags}`,

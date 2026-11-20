@@ -1,6 +1,6 @@
 /**
  * The accent profile's features in plain words, for the "Your accent" panel
- * and the confirmed-pattern cards: no phonetic letters, only English words
+ * and the Vowels check's cards (`vowels.ts`): no phonetic letters, only English words
  * and the letters that spell the sound in them.
  *
  * A vowel feature is named by its keyword ("the U in 'cup'") and its lexical
@@ -200,6 +200,28 @@ export function patternCard(phone: string, rival: string): string | null {
   return way === null
     ? `${head} tends to sound like ${like}; here too.`
     : `${head} tends to ${TENDS[way]}, like ${like}; here too. ${FIX[way]}`;
+}
+
+/** How a card names a vowel: "the A in 'cap'"; null for one this table does not know. */
+export function vowelNamed(phone: string): string | null {
+  const one = vowelOf(phone);
+  return one === null ? null : `the ${one.letters} in '${one.keyword}'`;
+}
+
+/**
+ * The card of a stressed vowel of `word` said as `rival` (`vowels.ts`), what was off and the
+ * fix, e.g. "The vowel in 'much' should be the U of 'cup'; it came out like the A in 'cap'.
+ * Drop your jaw less." Null when either is no vowel this knows, or both are one sound to it.
+ */
+export function vowelCard(word: string, phone: string, rival: string): string | null {
+  const want = vowelOf(phone);
+  const got = vowelOf(rival);
+  if (want === null || got === null || want.set === got.set) return null;
+  const way = directionOf(phone, rival);
+  const head =
+    `The vowel in '${word}' should be the ${want.letters} of '${want.keyword}'; ` +
+    `it came out like the ${got.letters} in '${got.keyword}'.`;
+  return way === null ? head : `${head} ${FIX[way]}`;
 }
 
 /** The sound's label on a confirmed card: "U (cup) → A (cap)". */

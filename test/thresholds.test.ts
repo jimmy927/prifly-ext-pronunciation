@@ -4,16 +4,19 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { CONTRAST_IDS, contrastId } from "../pronounce/contrasts";
 import { type Candidate, marks } from "../pronounce/judge";
+import { Z_P01, Z_P05 } from "../pronounce/native";
+import { loadStressCheck } from "../pronounce/stress";
 import {
   cutOf,
   DEFAULT_CUT,
-  loadShipped,
+  DEFAULT_DEVIATE_CUT,
+  deviateCutOf,
+  deviateLevel,
+  loadDeviateCuts,
   loadThresholds,
-  loadVowelPatterns,
+  parseDeviateCuts,
   parseThresholds,
-  parseVowelPatterns,
   THRESHOLDS_PATH,
-  withOverrides,
 } from "../pronounce/thresholds";
 
 test("no file keeps every check at 0.70 / 0.88", async () => {
@@ -40,6 +43,7 @@ test("an id that is no check is left out, a sure below its maybe is raised to it
       "x-y": { maybe: 0.1 },
       "sh-ch": { maybe: 0.9, sure: 0.5 },
       "final-devoicing": { off: true },
+      "any-sound": { maybe: -3 },
     },
   });
   expect([...cuts.keys()].sort()).toEqual(["final-devoicing", "sh-ch"]);
@@ -60,75 +64,53 @@ test("each swap belongs to one of the five checks", () => {
   expect(contrastId("tʃ", "ʃ", false)).toBe("sh-ch");
 });
 
-test("the vowel-patterns entry turns the vowel underlines on only with off: false; the contrasts do not read it", async () => {
-  expect(parseVowelPatterns({ contrasts: {} })).toBe(false);
-  expect(parseVowelPatterns({ contrasts: { "vowel-patterns": { off: true, why: "x" } } })).toBe(
-    false,
-  );
-  expect(parseVowelPatterns({ contrasts: { "vowel-patterns": {} } })).toBe(false);
-  expect(parseVowelPatterns({ contrasts: { "vowel-patterns": { off: false } } })).toBe(true);
-  expect(() => parseVowelPatterns({ contrasts: { "vowel-patterns": { off: "no" } } })).toThrow();
-  const cuts = parseThresholds({ contrasts: { "vowel-patterns": { off: false } } });
-  expect([...cuts.keys()]).toEqual([]);
-  // No file, or a broken one, is off.
-  const folder = await mkdtemp(join(tmpdir(), "thresholds-"));
-  expect(await loadVowelPatterns(join(folder, "none.json"))).toBe(false);
-  await writeFile(join(folder, "bad.json"), "{ not json");
-  expect(await loadVowelPatterns(join(folder, "bad.json"))).toBe(false);
-});
-
-test("the shipped file has the vowel underlines off and Z/S on at 0.70 / 0.88, everything else off", async () => {
-  expect(await loadVowelPatterns(THRESHOLDS_PATH)).toBe(false);
+test("the shipped file has every contrast on at the natives' cut-offs, never stricter than 0.70 / 0.88", async () => {
   const shipped = await loadThresholds(THRESHOLDS_PATH);
-  expect(cutOf(shipped, "z-s")).toEqual({ maybe: 0.7, sure: 0.88, off: false });
-  for (const id of ["final-devoicing", "th", "w-v", "sh-ch"] as const)
-    expect(cutOf(shipped, id).off).toBe(true);
-  const heard = (posterior: number): Candidate => ({
+  for (const id of CONTRAST_IDS) {
+    const cut = cutOf(shipped, id);
+    expect(cut.off).toBe(false);
+    expect(cut.maybe).toBeLessThanOrEqual(0.7);
+    expect(cut.sure).toBeLessThanOrEqual(0.88);
+  }
+  expect(cutOf(shipped, "z-s")).toEqual({ maybe: 0.5, sure: 0.5, off: false });
+  expect(cutOf(shipped, "final-devoicing")).toEqual({ maybe: 0.5, sure: 0.725, off: false });
+  const heard = (posterior: number, id: Candidate["id"] = "z-s"): Candidate => ({
     at: 1,
     expected: "z",
     heard: "s",
-    id: "z-s",
+    id,
     last: false,
     posterior,
     wasHeard: true,
     expectedHeard: false,
     variantAccepts: false,
   });
-  expect(marks(heard(0.69), shipped)).toBe(false);
-  expect(marks(heard(0.7), shipped)).toBe(true);
-  expect(marks({ ...heard(0.99), id: "th" }, shipped)).toBe(false);
+  expect(marks(heard(0.49), shipped)).toBe(false);
+  for (const id of CONTRAST_IDS) expect(marks(heard(0.5, id), shipped)).toBe(true);
 });
 
-test("the reader's own settings beat the file's: on from their cut-off, off, and the rest as the file has them", async () => {
-  const shipped = await loadThresholds(THRESHOLDS_PATH);
-  const own = withOverrides(shipped, {
-    th: { off: false, maybe: 0.62 },
-    "z-s": { off: true, maybe: 1 },
-    "w-v": { off: false, maybe: 0.95 },
+test("the shipped file has word stress on, and the natives'-scale checks at their 0.5th / 0.1th percentile", async () => {
+  expect(await loadStressCheck(THRESHOLDS_PATH)).not.toBeNull();
+  const cuts = await loadDeviateCuts(THRESHOLDS_PATH);
+  for (const id of ["any-sound", "weak-vowels"] as const) {
+    const cut = deviateCutOf(cuts, id);
+    expect(cut.off).toBe(false);
+    expect(cut.maybe).toBeCloseTo(Z_P05, 3);
+    expect(cut.sure).toBeCloseTo(Z_P01, 3);
+  }
+});
+
+test("the natives'-scale cut-offs: the file's, a sure looser than its maybe pulled to it, the defaults without", async () => {
+  const cuts = parseDeviateCuts({
+    contrasts: { "any-sound": { maybe: -3, sure: -2 }, th: { maybe: 0.5 } },
   });
-  // th's sure in the file is 0.5: it is raised to the reader's cut-off.
-  expect(cutOf(own, "th")).toEqual({ maybe: 0.62, sure: 0.62, off: false });
-  expect(cutOf(own, "z-s").off).toBe(true);
-  expect(cutOf(own, "w-v")).toEqual({ maybe: 0.95, sure: 0.95, off: false });
-  expect(cutOf(own, "sh-ch")).toEqual(cutOf(shipped, "sh-ch"));
-  expect(withOverrides(shipped, undefined)).toBe(shipped);
-  // The file itself is untouched.
-  expect(cutOf(shipped, "z-s").off).toBe(false);
-});
-
-test("the shipped file ships Z/S on and every other check off; no file ships the contrasts only", async () => {
-  expect([...(await loadShipped(THRESHOLDS_PATH))]).toEqual(["z-s"]);
+  expect(deviateCutOf(cuts, "any-sound")).toEqual({ maybe: -3, sure: -3, off: false });
+  expect(deviateCutOf(cuts, "weak-vowels")).toEqual(DEFAULT_DEVIATE_CUT);
+  expect(() => parseDeviateCuts({ contrasts: { "weak-vowels": { maybe: 1 } } })).toThrow();
+  expect(deviateLevel(-3.2, DEFAULT_DEVIATE_CUT)).toBe("sure");
+  expect(deviateLevel(-2.8, DEFAULT_DEVIATE_CUT)).toBe("maybe");
   const folder = await mkdtemp(join(tmpdir(), "thresholds-"));
-  expect([...(await loadShipped(join(folder, "none.json")))]).toEqual([...CONTRAST_IDS]);
-  const file = join(folder, "on.json");
-  await writeFile(
-    file,
-    JSON.stringify({
-      contrasts: { th: { off: true }, stress: { off: false }, "vowel-patterns": { off: false } },
-    }),
-  );
-  const on: string[] = [...(await loadShipped(file))];
-  expect(on.sort()).toEqual(
-    ["final-devoicing", "sh-ch", "stress", "vowel-patterns", "w-v", "z-s"].sort(),
-  );
+  expect((await loadDeviateCuts(join(folder, "none.json"))).size).toBe(0);
+  await writeFile(join(folder, "bad.json"), "{ not json");
+  expect((await loadDeviateCuts(join(folder, "bad.json"))).size).toBe(0);
 });

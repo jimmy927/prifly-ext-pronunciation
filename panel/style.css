@@ -298,17 +298,13 @@ p {
 }
 .result {
   margin-top: 4px;
-  font-weight: 600;
+  color: var(--muted-fg);
 }
-.result-on .result {
+.switched-on .badge {
   color: var(--on);
 }
-.result-off .result {
+.switched-off .badge {
   color: var(--far);
-}
-.result-few .result {
-  color: var(--muted-fg);
-  font-weight: 400;
 }
 .none {
   color: var(--muted-fg);

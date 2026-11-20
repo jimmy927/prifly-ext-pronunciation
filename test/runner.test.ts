@@ -78,6 +78,7 @@ test("a piece goes to the worker with only its words' text and time, and its mar
   expect([...decodeFloats(request.pcm)]).toEqual([0.5, -0.5]);
   const judged = {
     index: 0,
+    check: "th" as const,
     word: "three",
     heard: "tɹiː",
     expected: "θɹiː",

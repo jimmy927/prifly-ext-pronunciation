@@ -2,8 +2,9 @@
  * How native speakers' sounds score, from `pronounce/data/native-stats.json`
  * (written by `tools/calibrate/stats.py` on LibriSpeech and VCTK): per phone
  * and per vowel, percentiles of the goodness (LPR, `gop.ts`) of every one the
- * natives said. The accent profile (`profile.ts`) and the confirmed-pattern
- * underlines (`confirmed.ts`) place the reader's scores among them.
+ * natives said. The accent profile (`profile.ts`), the Vowels check
+ * (`vowels.ts`), any other swapped sound (`any-sound.ts`) and unreduced vowels
+ * (`weak-vowels.ts`) place the reader's scores among them.
  *
  * A score is placed by its normal deviate: the percentiles given (p1, p5, p10
  * … p99, and p0.5 when the file has it) are points of value against z, and a
@@ -37,8 +38,8 @@ const Z_OF: ReadonlyArray<readonly [string, number]> = [
 export const Z_P10 = -1.2816;
 /** z of the natives' 0.5th percentile: at most 1 native word in 200 sits below it. */
 export const Z_P05 = -2.5758;
-/** z of 1 native word in 2000. */
-export const Z_P005 = -3.2905;
+/** z of the natives' 0.1th percentile: 1 native sound in 1000. */
+export const Z_P01 = -3.0902;
 /** Native examples a phone needs before the reader's are compared with them. */
 export const MIN_NATIVE = 100;
 

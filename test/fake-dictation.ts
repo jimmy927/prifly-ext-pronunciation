@@ -61,12 +61,12 @@ export function threeTrees(patch: Partial<DictationPiece> = {}): DictationPiece 
   };
 }
 
-export const THREE_DETAIL =
-  "The TH (as in thin) came out as a T. Tongue tip between the teeth, let the air through.";
+export const THREE_DETAIL = "TH said as T. Tongue tip between the teeth, let the air through.";
 
 /** What the judge says of "three" said with a t. */
 export const THREE_AS_TREE = {
   index: 0,
+  check: "th" as const,
   word: "Three",
   heard: "triː",
   expected: "θriː",

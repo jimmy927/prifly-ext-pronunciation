@@ -3,7 +3,8 @@
 // and it said right ("Say it right") to play. A button that cannot play is disabled with
 // the reason as its tooltip; none appears or disappears. Its second tab, "Check your flags",
 // reads `api/flags` (pronounce/flag-check.ts): the reader scores their past sentences with
-// every check and marks each flag Right or Wrong.
+// every check and marks each flag Right or Wrong; each check shows its tally (Wrong here and
+// "Not a mistake" in the session) beside the switch in Settings that turns it off.
 
 const body = document.getElementById("body");
 const heading = document.getElementById("heading");
@@ -196,7 +197,6 @@ const tabs = {
 
 /** How often the page asks again while a job runs, ms. */
 const POLL_MS = 1500;
-const RESULT_CLASS = { on: "on", off: "off", few: "few" };
 
 let flagsView = null;
 let poll = null;
@@ -262,7 +262,7 @@ async function playFlag(flag, which, button, errorLine) {
 }
 
 function checkSection(check, view) {
-  const section = el("details", `check result-${RESULT_CLASS[check.result] ?? "few"}`);
+  const section = el("details", `check ${check.on ? "switched-on" : "switched-off"}`);
   section.open = !closedChecks.has(check.id);
   section.dataset.check = check.id;
   section.addEventListener("toggle", () => {
@@ -271,18 +271,12 @@ function checkSection(check, view) {
   });
   const summary = el("summary", "check-head");
   summary.append(el("h2", "", check.title));
-  summary.append(
-    el(
-      "span",
-      `badge ${check.shipped ? "shipped-on" : "shipped-off"}`,
-      check.shipped ? "Ships on" : "Ships off",
-    ),
-  );
+  summary.append(el("span", "badge", check.on ? "On" : "Off in Settings"));
   summary.append(
     el(
       "span",
       "tally",
-      `${check.flags.length} flag${check.flags.length === 1 ? "" : "s"} · ${check.marked} marked · ${check.right} right`,
+      `${check.flags.length} flag${check.flags.length === 1 ? "" : "s"} · ${check.marked} marked · ${check.wrong} wrong`,
     ),
   );
   section.append(summary);

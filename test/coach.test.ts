@@ -1,18 +1,15 @@
 import { expect, test } from "bun:test";
 import type { DictationMark } from "@prifly/extension-api";
 import manifest from "../prifly-extension.json";
+import { CHECK_IDS, CHECK_LABELS, SWITCHES } from "../pronounce/checks";
+import { Coach, isEnglish, KEPT_SESSIONS, NOT_A_MISTAKE, NOT_MISTAKES } from "../pronounce/coach";
 import {
-  Coach,
   detailOf,
-  isEnglish,
-  KEPT_SESSIONS,
-  NOT_A_MISTAKE,
-  NOT_MISTAKES,
   UNDERLINE,
   UNDERLINE_ALL,
   UNDERLINE_OFF,
   UNDERLINE_SURE,
-} from "../pronounce/coach";
+} from "../pronounce/drawn";
 import type { Judged, JudgeWord } from "../pronounce/judge";
 import {
   type FakeDictation,
@@ -321,18 +318,18 @@ test("a mark carries its level, confidence, both respellings clipped to 40, and 
   ]);
 });
 
-test("the setting 'Sure mistakes only' draws the sure marks and not the maybe ones; it is the default", async () => {
-  for (const underline of [UNDERLINE_SURE, undefined, "something else"]) {
-    const fake = await markedWith(underline, [0.75]);
-    expect(fake.marks).toEqual([]);
-  }
-  const fake = await markedWith(UNDERLINE_SURE, [0.9]);
-  expect(fake.marks[0]?.marks.map((mark) => mark.level)).toEqual(["sure"]);
+test("the setting 'Sure mistakes only' draws the sure marks and not the maybe ones", async () => {
+  const fake = await markedWith(UNDERLINE_SURE, [0.75]);
+  expect(fake.marks).toEqual([]);
+  const sure = await markedWith(UNDERLINE_SURE, [0.9]);
+  expect(sure.marks[0]?.marks.map((mark) => mark.level)).toEqual(["sure"]);
 });
 
-test("the setting 'Sure and not sure' draws both levels", async () => {
-  const fake = await markedWith(UNDERLINE_ALL, [0.75]);
-  expect(fake.marks[0]?.marks.map((mark) => mark.level)).toEqual(["maybe"]);
+test("the setting 'Sure and not sure' draws both levels; it is the default", async () => {
+  for (const underline of [UNDERLINE_ALL, undefined, "something else"]) {
+    const fake = await markedWith(underline, [0.75]);
+    expect(fake.marks[0]?.marks.map((mark) => mark.level)).toEqual(["maybe"]);
+  }
 });
 
 test("the setting 'Off' sends no marks and judges nothing", async () => {
@@ -399,7 +396,7 @@ test("a prifly without mark levels is given the marks as before, without the new
   expect(fake.marks[0]?.marks).toEqual([old]);
 });
 
-test("the manifest declares the underline setting the coach reads, the voice box settings, and the version 0.3.0", () => {
+test("the manifest declares the underline setting the coach reads, a switch per check, all on, the voice box settings, and the version 0.3.0", () => {
   expect(manifest.version).toBe("0.3.0");
   expect(manifest.settings).toEqual([
     {
@@ -407,9 +404,16 @@ test("the manifest declares the underline setting the coach reads, the voice box
       label: "Underline",
       description: expect.any(String),
       type: "select",
-      default: UNDERLINE_SURE,
+      default: UNDERLINE_ALL,
       options: [UNDERLINE_SURE, UNDERLINE_ALL, UNDERLINE_OFF],
     },
+    ...CHECK_IDS.map((id) => ({
+      id: SWITCHES[id],
+      label: CHECK_LABELS[id],
+      description: expect.any(String),
+      type: "boolean",
+      default: true,
+    })),
     {
       id: "voiceBox",
       label: expect.any(String),

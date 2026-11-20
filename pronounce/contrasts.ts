@@ -120,43 +120,37 @@ export function swapsFrom(expected: string, last: boolean): string[] {
   return heard;
 }
 
-/** A sound as a plain reader writes it, with the word it sounds like where the letters alone do not say it. */
-const LETTERS: Record<string, string> = {
-  θ: "TH (as in thin)",
-  ð: "TH (as in this)",
+/** A consonant as a plain reader names it: its letters, "TH" for both th sounds, "Y" for the y of "yes". */
+const NAMES_PLAIN: Record<string, string> = {
+  θ: "TH",
+  ð: "TH",
   ʃ: "SH",
   tʃ: "CH",
   dʒ: "J",
-  ʒ: "ZH (as in measure)",
+  ʒ: "ZH",
+  ŋ: "NG",
+  ɡ: "G",
+  ɹ: "R",
+  j: "Y",
 };
 
-/** The sound heard, as it is named after "came out as": an article and the letters, a hissing S for s. */
-const CAME_OUT_AS: Record<string, string> = {
-  s: "a hissing S",
-  θ: "a thin TH",
-  ʃ: "an SH",
-  tʃ: "a CH",
-  dʒ: "a J",
-  ʒ: "a ZH",
-};
-
-function lettersOf(phone: string): string {
-  return LETTERS[phone] ?? phone.toUpperCase();
+/** `phone` as a plain reader names it: "TH", "SH", "Y", "D". */
+export function soundName(phone: string): string {
+  return NAMES_PLAIN[phone] ?? phone.toUpperCase();
 }
 
-function cameOutAs(phone: string): string {
-  const known = CAME_OUT_AS[phone];
-  if (known !== undefined) return known;
-  const letters = phone.toUpperCase();
-  return `${"FHLMNRSX".includes(letters.slice(0, 1)) ? "an" : "a"} ${letters}`;
+/** The sound heard, as named after "came out as": an article and its name, "an S", "a Y". */
+export function cameOutAs(phone: string): string {
+  const name = soundName(phone);
+  return `${"FHLMNRSX".includes(name.slice(0, 1)) ? "an" : "a"} ${name}`;
 }
 
-/** What to do about a final voiced sound that went voiceless: keep buzzing for the buzzing ones, keep the voice on for the stops. */
+/** A final voiced sound that went voiceless: keep buzzing for the buzzing ones, keep the voice on for the stops. */
 function finalFix(expected: string): string {
-  const letters = lettersOf(expected);
+  const name = soundName(expected);
   return "zvð".includes(expected)
-    ? `Keep buzzing to the end: ${letters}.`
-    : `Keep the voice on to the end: ${letters}.`;
+    ? `Keep buzzing through the ${name} at the end.`
+    : `Keep your voice on through the ${name} at the end.`;
 }
 
 /** The first letter of `how` capitalised, and a full stop at its end. */
@@ -165,16 +159,26 @@ function sentence(how: string): string {
 }
 
 /**
- * The one line the reader sees as the fix, in plain words: no IPA, no
- * slashes. What came out ("The end came out as a hissing S.") and what to do
- * ("Keep buzzing to the end: Z."), from the same swaps as `accentContrast`;
- * null for every other swap.
+ * The card's first words, which name the check as its switch does: "Z said as S.", "TH said
+ * as T.", "Final D said as T."; a final Z is "Z said as S." (`checks.ts`'s `checkOfSwap`), and
+ * a final TH that only lost its voice "Final TH lost its voice.".
+ */
+export function swapHead(expected: string, heard: string, last: boolean): string {
+  const final = last && FINAL_DEVOICING[expected] === heard && expected !== "z" ? "Final " : "";
+  const from = soundName(expected);
+  const to = soundName(heard);
+  return from === to ? `${final}${from} lost its voice.` : `${final}${from} said as ${to}.`;
+}
+
+/**
+ * The card the reader sees, in plain words, no IPA: the check and what came out ("TH said as
+ * T.") and what to do ("Tongue tip between the teeth, let the air through."), from the same
+ * swaps as `accentContrast`; null for every other swap.
  */
 export function plainFix(expected: string, heard: string, last: boolean): string | null {
-  if (last && FINAL_DEVOICING[expected] === heard) {
-    return `The end came out as ${cameOutAs(heard)}. ${finalFix(expected)}`;
-  }
+  const head = swapHead(expected, heard, last);
+  if (last && FINAL_DEVOICING[expected] === heard) return `${head} ${finalFix(expected)}`;
   const how = ACCENT_SWAPS[`${expected}>${heard}`];
   if (how === undefined) return null;
-  return `The ${lettersOf(expected)} came out as ${cameOutAs(heard)}. ${sentence(how)}`;
+  return `${head} ${sentence(how)}`;
 }

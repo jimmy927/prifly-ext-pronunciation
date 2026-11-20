@@ -1,23 +1,26 @@
 /**
- * The posterior cut-offs of each check (`contrasts.ts`'s `ContrastId`):
- * from `maybe` up a heard swap is marked "maybe", from `sure` up "sure". They
- * come from `pronounce/data/thresholds.json` when it is there, written by
- * `tools/calibrate/stats.py` from native and learner speech; a check it lists
- * with `"off": true` is never marked, and a check it does not list, or no
- * file at all, keeps the cut-offs the 13-speaker benchmark settled on
- * (`MIN_HEARD_POSTERIOR`, `SURE_POSTERIOR`).
+ * The cut-offs of the checks, from `pronounce/data/thresholds.json` when it is there, written by
+ * `tools/calibrate/stats.py` from native and learner speech. Whether a check is drawn at all is
+ * the reader's switch in Settings (`checks.ts`); this file only says from where a check marks.
  *
- * The file: `{ "contrasts": { "z-s": { "maybe": 0.74, "sure": 0.9 }, "th": { "off": true } } }`;
- * other top-level keys (where it came from, when) are ignored here, and so is
- * the `stress` entry, which `stress.ts` reads: word stress, unlike the
- * contrasts, is off unless the file turns it on. The `vowel-patterns` entry
- * (`{ "off": false }` to turn them on) is the switch of the confirmed-pattern
- * vowel underlines (`confirmed.ts`); see `loadVowelPatterns`.
+ * - The five contrasts (`contrasts.ts`'s `ContrastId`): from the posterior `maybe` up a heard
+ *   swap is marked "maybe", from `sure` up "sure". A contrast the file does not list, or no
+ *   file at all, keeps the cut-offs the 13-speaker benchmark settled on (`MIN_HEARD_POSTERIOR`,
+ *   `SURE_POSTERIOR`); one it lists with `"off": true` is never marked.
+ * - Any other swapped sound and unreduced vowels (`DeviateId`): on the natives' scale, a normal
+ *   deviate (`native.ts`): a sound whose goodness sits at or below the natives' `maybe` is marked
+ *   "maybe", at or below `sure` "sure". Without an entry: the natives' 0.5th percentile (1 sound
+ *   in 200) and 0.1th (1 in 1000).
+ *
+ * The file: `{ "contrasts": { "z-s": { "maybe": 0.5, "sure": 0.5 }, "any-sound": { "maybe": -2.9,
+ * "sure": -3.3 } } }`; other top-level keys (where it came from, when, why) are ignored here, and
+ * so is the `stress` entry, which `stress.ts` reads.
  */
 
 import { join } from "node:path";
 import { z } from "zod";
 import { CONTRAST_IDS, type ContrastId } from "./contrasts";
+import { Z_P01, Z_P05 } from "./native";
 
 /** The heard phone's highest probability over its frames must reach this for a substitution to count. */
 export const MIN_HEARD_POSTERIOR = 0.7;
@@ -81,34 +84,6 @@ export async function loadThresholds(path: string = THRESHOLDS_PATH): Promise<Th
   }
 }
 
-/** The id of the vowel-pattern switch in `thresholds.json`, beside the contrasts'. */
-export const VOWEL_PATTERNS_ID = "vowel-patterns";
-
-const Switch = z.object({ off: z.boolean().optional() });
-
-/**
- * Whether the file turns the confirmed-pattern vowel underlines on: only an
- * entry `"vowel-patterns": { "off": false }`. No entry, or one without
- * `"off": false`, is off. Throws on JSON of another shape.
- */
-export function parseVowelPatterns(json: unknown): boolean {
-  const raw = File.parse(json).contrasts[VOWEL_PATTERNS_ID];
-  return raw !== undefined && Switch.parse(raw).off === false;
-}
-
-/** `parseVowelPatterns` of the file at `path`; off when there is no file or it is not valid (said on stderr). */
-export async function loadVowelPatterns(path: string = THRESHOLDS_PATH): Promise<boolean> {
-  const file = Bun.file(path);
-  if (!(await file.exists())) return false;
-  try {
-    return parseVowelPatterns(await file.json());
-  } catch (caught) {
-    const why = caught instanceof Error ? caught.message : String(caught);
-    process.stderr.write(`pronounce: vowel underlines off, ${path}: ${why}\n`);
-    return false;
-  }
-}
-
 /** The cut-offs of check `id`. */
 export function cutOf(thresholds: Thresholds, id: ContrastId): Cut {
   return thresholds.get(id) ?? DEFAULT_CUT;
@@ -119,59 +94,61 @@ export function levelAt(posterior: number, cut: Cut): "sure" | "maybe" {
   return posterior >= cut.sure ? "sure" : "maybe";
 }
 
-/**
- * Every check the reader can mark flags of ("Check your flags", `flag-check.ts`): the five
- * contrasts, word stress (`stress.ts`) and the confirmed-pattern vowels (`confirmed.ts`).
- */
-export const CHECK_IDS = [...CONTRAST_IDS, "stress", VOWEL_PATTERNS_ID] as const;
-export type CheckId = (typeof CHECK_IDS)[number];
+/** The checks whose cut-offs are on the natives' scale. */
+export const DEVIATE_IDS = ["any-sound", "weak-vowels"] as const;
+export type DeviateId = (typeof DEVIATE_IDS)[number];
 
-/**
- * The checks the file ships on: each contrast it does not turn off, word stress when its entry
- * says `"off": false`, the vowel patterns as `parseVowelPatterns` reads them. No file: the
- * contrasts only. Read for the "Check your flags" page; the worker reads the file itself.
- */
-export async function loadShipped(path: string = THRESHOLDS_PATH): Promise<Set<CheckId>> {
-  const contrasts = await loadThresholds(path);
-  const on = new Set<CheckId>(CONTRAST_IDS.filter((id) => !cutOf(contrasts, id).off));
-  const file = Bun.file(path);
-  if (!(await file.exists())) return on;
-  try {
-    const json: unknown = await file.json();
-    const stress = Switch.safeParse(File.parse(json).contrasts["stress"]);
-    if (stress.success && stress.data.off === false) on.add("stress");
-    if (parseVowelPatterns(json)) on.add(VOWEL_PATTERNS_ID);
-  } catch {
-    // Said on stderr by `loadThresholds` already; the contrasts' answer stands.
-  }
-  return on;
-}
+/** A natives'-scale cut-off: marked "maybe" at or below `maybe`, "sure" at or below `sure` (both normal deviates, below 0). */
+export type DeviateCut = { maybe: number; sure: number; off: boolean };
 
-/** A reader's own setting of one check, from their marks (`personal.ts`): on from `maybe` up, or off. */
-export type Override = { off: boolean; maybe: number };
+/** Without an entry: 1 native sound in 200 for "maybe", 1 in 1000 for "sure". */
+export const DEFAULT_DEVIATE_CUT: DeviateCut = { maybe: Z_P05, sure: Z_P01, off: false };
 
-/**
- * `thresholds` with the reader's own settings over it: a check the reader's marks turned on is
- * marked from their cut-off (sure from the file's sure, or from theirs when it is higher), one
- * they turned off is never marked, whatever `thresholds.json` says; a check they have no setting
- * for keeps the file's.
- */
-export function withOverrides(
-  thresholds: Thresholds,
-  overrides: Partial<Record<ContrastId, Override>> | undefined,
-): Thresholds {
-  if (overrides === undefined) return thresholds;
-  const cuts = new Map(thresholds);
-  for (const id of CONTRAST_IDS) {
-    const own = overrides[id];
-    if (own === undefined) continue;
-    const file = cutOf(thresholds, id);
-    cuts.set(
-      id,
-      own.off
-        ? { ...file, off: true }
-        : { maybe: own.maybe, sure: Math.max(own.maybe, file.sure), off: false },
-    );
+export type DeviateCuts = ReadonlyMap<DeviateId, DeviateCut>;
+
+const DeviateEntry = z.object({
+  maybe: z.number().max(0).optional(),
+  sure: z.number().max(0).optional(),
+  off: z.boolean().optional(),
+});
+
+/** The natives'-scale cut-offs of the file's JSON; a check it does not list keeps `DEFAULT_DEVIATE_CUT`. Throws on JSON of another shape. */
+export function parseDeviateCuts(json: unknown): DeviateCuts {
+  const contrasts = File.parse(json).contrasts;
+  const cuts = new Map<DeviateId, DeviateCut>();
+  for (const id of DEVIATE_IDS) {
+    const raw = contrasts[id];
+    if (raw === undefined) continue;
+    const entry = DeviateEntry.parse(raw);
+    const maybe = entry.maybe ?? DEFAULT_DEVIATE_CUT.maybe;
+    cuts.set(id, {
+      maybe,
+      sure: Math.min(maybe, entry.sure ?? DEFAULT_DEVIATE_CUT.sure),
+      off: entry.off ?? false,
+    });
   }
   return cuts;
+}
+
+/** `parseDeviateCuts` of the file at `path`; the defaults when there is none or it is not valid (said on stderr). */
+export async function loadDeviateCuts(path: string = THRESHOLDS_PATH): Promise<DeviateCuts> {
+  const file = Bun.file(path);
+  if (!(await file.exists())) return new Map();
+  try {
+    return parseDeviateCuts(await file.json());
+  } catch (caught) {
+    const why = caught instanceof Error ? caught.message : String(caught);
+    process.stderr.write(`pronounce: ${path} ignored for the natives' cut-offs: ${why}\n`);
+    return new Map();
+  }
+}
+
+/** The natives'-scale cut-off of check `id`. */
+export function deviateCutOf(cuts: DeviateCuts, id: DeviateId): DeviateCut {
+  return cuts.get(id) ?? DEFAULT_DEVIATE_CUT;
+}
+
+/** How sure a mark whose sound sits at native deviate `deviate` is under `cut`. */
+export function deviateLevel(deviate: number, cut: DeviateCut): "sure" | "maybe" {
+  return deviate <= cut.sure ? "sure" : "maybe";
 }

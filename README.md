@@ -5,27 +5,35 @@
 _A sent message with two marked words, and the card that opens on one of them (invented sentence)._
 
 A prifly extension that listens to your English dictation and puts a wavy
-underline under words said with a German or Swedish accent feature. With the
-caret in one, the hint under the message box says how to fix it. Pointing at
-the word in a sent message opens a card: the word, "Sure · 94%", "You said"
-the struck-through TREE, "Say THREE" and the fix line:
+underline under words said with an accent feature: nine checks, every one on,
+each with its own switch. With the caret in one, the hint under the message box
+says how to fix it. Pointing at the word in a sent message opens a card: the
+word, "Sure · 94%", "You said" the struck-through TREE, "Say THREE" and the
+card's line, whose first words name the check:
 
-> **three** The TH (as in thin) came out as a T. Tongue tip between the teeth,
-> let the air through.
+> **three** TH said as T. Tongue tip between the teeth, let the air through.
 
 The respellings (`pronounce/respell.ts`) are plain English, not IPA: the
 stressed syllable in capitals, syllables joined by "-", and the swapped sound
 doubled where it stands alone after a vowel (BROW-sser to BROW-zzer, THEESS to
-THEEZZ). A mark is "sure" when the model gave the heard phone a posterior of at
-least 0.88, and "maybe" from 0.70 up to that, unless `pronounce/data/thresholds.json`
-(from `tools/calibrate`) sets other cut-offs for that check.
+THEEZZ). A mark is "sure" when natives get it on at most 1 word in 1000, and
+"not sure" up to 1 in 200 (`pronounce/data/thresholds.json`, from
+`tools/calibrate`; see "What ships now").
 
 Settings → Extensions → Pronunciation → Underline picks which are drawn:
-"Sure mistakes only" (the default), "Sure and not sure", or "Off" (nothing is
-judged then). A change applies at once, to the marks already given too.
+"Sure and not sure" (the default), "Sure mistakes only", or "Off" (nothing is
+judged then). A "Sure mistakes only" picked before this default is read as
+"Sure and not sure" once, on the first start after the update (remembered in
+`api.state`, `pronounce/drawn.ts`), until you pick an Underline yourself. An
+extension cannot write its settings, so the form keeps saying "Sure mistakes
+only" meanwhile: pick another and back to make it yours. Below Underline, one
+switch per check (see "What it marks"): turn off what does not work for you. A
+change applies at once, to the marks already given too, and nothing switches
+a check off by itself.
 
 Listen is prifly's own. "Not a mistake" keeps that word with what was heard
-in it, in `api.state`, and the pair is never marked again. A dictated word you
+in it, in `api.state`, and the pair is never marked again; it also counts as a
+Wrong on that check in "Check your flags", and switches nothing. A dictated word you
 correct by hand is judged again as the corrected word. Pieces in other
 languages are ignored, and dictation never waits on the extension: work runs
 after the words are in the box, and while one request runs only the newest one
@@ -74,76 +82,97 @@ says it has no reference. `pronounce/play-shim.ts` holds the types of
 
 ## What it marks
 
-Only substitutions that are accent features: z to s, a final voiced consonant
-gone voiceless, th said as t, s, f, d or z, w and v for each other, and sh, ch,
-j, zh for one another. The piece's words are first aligned over the model's
-output as one sentence (`pronounce/force-align.ts`, a CTC forced alignment), each
-as the pronunciation the audio fits best, so Parakeet's word times, off by up to
-440 ms, only bound where a word may go. A phone of that pronunciation is marked
-when the model heard such a substitution there with a posterior of at least 0.7
-(or its check's cut-off in `pronounce/data/thresholds.json`, where a check can
-also be `"off"`), did not hear the expected phone there too, and no other
-accepted pronunciation of the word (Britfone's British, CMUdict's American) has
-the heard phone in that place. Only words Britfone has are judged. Vowel
-differences, left-out and added sounds and a list of function words are never
-marked.
+Nine checks (`pronounce/checks.ts`), each with its switch in Settings →
+Extensions → Pronunciation, all on by default. Every card starts with the
+check's name, says what was off and how to fix it, under 300 characters, with
+the "You said" and "Say" respellings:
 
-Word stress ("DI-ve-lu-per" for "dee-VE-lu-per", `pronounce/stress.ts`) is
-marked on a word of two or more vowels with a known stress when another
-syllable is louder, longer and higher than the stressed one, each cue scaled
-by the whole sentence's, by more than natives ever do: the cut-offs come from
-the `stress` entry of `pronounce/data/thresholds.json` and the natives' leads in
-`native-stats.json`. Without both, or with that entry `"off"`, it marks nothing.
-A word with a substitution mark gets no stress mark too.
+| Switch                  | What it underlines                                                                                   | The card starts      |
+| ----------------------- | ---------------------------------------------------------------------------------------------------- | -------------------- |
+| Z said as S             | please, these, was: a Z (or the ZH of measure) heard as S, at the end of a word too                  | "Z said as S."       |
+| Final D said as T       | did, need, could: a final B, D, G, V or TH gone voiceless                                            | "Final D said as T." |
+| TH said as T, D, S or F | three, this, think                                                                                   | "TH said as T."      |
+| W and V swapped         | we, very, wave                                                                                       | "W said as V."       |
+| SH, CH and J swapped    | shop, chip, job                                                                                      | "SH said as CH."     |
+| Any other swapped sound | any other consonant heard as another: the J in just said as Y, an R as an L                          | "Swapped sound."     |
+| Word stress             | DEV-eloper for de-VEL-oper: the wrong syllable stressed                                              | "Word stress."       |
+| Vowels                  | much said like match, a gliding vowel held still: a stressed vowel natives almost never say that way | "Vowel."             |
+| Unreduced vowels        | the A in about or the O in today said full instead of a weak uh                                      | "Unreduced vowel."   |
 
-These rules come from a benchmark on 13 Speech Accent Archive speakers (5
-German, 5 Swedish, 3 native English), where every other kind of edit was as
-common in natives as in learners. Do not retune them without rerunning it.
+The piece's words are first aligned over the model's output as one sentence
+(`pronounce/force-align.ts`, a CTC forced alignment), each as the pronunciation
+the audio fits best, so Parakeet's word times, off by up to 440 ms, only bound
+where a word may go. Only words Britfone has are judged, never a function word,
+and a way of saying a word that another accepted pronunciation has (Britfone's
+British, CMUdict's American) is never a mistake.
+
+- **The five named swaps** (`pronounce/judge.ts`, `contrasts.ts`): a phone the
+  model heard as such a swap with a posterior from its check's cut-off up, the
+  expected phone not heard there too.
+- **Any other swapped sound** (`pronounce/any-sound.ts`): a consonant whose
+  goodness (the model's log posterior for it against its best competitor,
+  `gop.ts`) sits past the natives' 0.5th percentile for that consonant, lost to
+  another English consonant that is none of the five named swaps and not the
+  sound beside it. The noisiest check.
+- **Word stress** (`pronounce/stress.ts`): a word of two or more vowels where
+  another syllable is louder, longer and higher than the stressed one, each cue
+  scaled by the whole sentence's, by more than natives do (the `stress` entry
+  of `thresholds.json` and the natives' leads in `native-stats.json`).
+- **Vowels** (`pronounce/vowels.ts`): a word's stressed full vowel, gliding ones
+  included, past the natives' 0.5th percentile for it and heard as a vowel of
+  another kind. Not sure, unless the accent profile has confirmed that very
+  pattern (`pronounce/confirmed.ts`): then sure, in any syllable, with the
+  pattern's card ("Your U in 'cup' tends to open…").
+- **Unreduced vowels** (`pronounce/weak-vowels.ts`): an unstressed schwa past
+  the natives' 0.5th percentile for schwa, heard as a full vowel.
+
+A word several checks mark shows the first switched on, in the table's order;
+switch that one off and the next shows. Left-out and added sounds are never
+marked. The five named swaps come from a benchmark on 13 Speech Accent Archive
+speakers (5 German, 5 Swedish, 3 native English).
 
 ### What ships now
 
-Only the Z/S underline (z said as s, and the reverse) is drawn. Every other
-substitution check, word stress and the confirmed-vowel underlines were measured
-(`tools/calibrate`, on LibriSpeech, VCTK and speechocean762's Mandarin learners)
-against a bar of 80% precision on labelled learner flags, and none reached it,
-so `pronounce/data/thresholds.json` has them `"off"`. Z/S ships by decision: its
-55% precision rests on 22 labelled flags, and natives trigger it on at most
-0.07% of words. The full run is in [`tools/calibrate/report.md`](tools/calibrate/report.md).
+Everything is on, one switch per check, so you can judge each in your own
+dictation and switch off what does not work for you. Expect many underlines:
+on speechocean762's Mandarin learners most flags were rated wrong. The cut-offs
+are the natives' (LibriSpeech and VCTK, `tools/calibrate`): a check marks "not
+sure" from where natives would get it on 1 word in 200, and "sure" from 1 in
+1000, never stricter than the 0.70 / 0.88 posterior the extension had before.
+Any other swapped sound and unreduced vowels are not measured per word yet:
+they mark from the natives' 0.5th (not sure) and 0.1th (sure) percentile of
+each sound until a calibration measures them. The full run is in
+[`tools/calibrate/report.md`](tools/calibrate/report.md).
 
-| check                      | learner precision                   | native flags per word at 0.70 | ships                      |
-| -------------------------- | ----------------------------------- | ----------------------------- | -------------------------- |
-| Z/S                        | 55%                                 | 0.07%                         | on (0.70 maybe, 0.88 sure) |
-| final devoicing            | 17%                                 | 0.11%                         | off                        |
-| th                         | 15%                                 | 0.06%                         | off                        |
-| w/v                        | 9%                                  | 0.00%                         | off                        |
-| sh/ch                      | 13% (16 flags, under the 20 needed) | 0.04%                         | off                        |
-| word stress                | 19%                                 | not tabulated                 | off                        |
-| confirmed vowel underlines | not reached 80%                     | not tabulated                 | off (`vowel-patterns`)     |
+| check                   | learner precision                   | native flags per word at 0.70 | ships                       |
+| ----------------------- | ----------------------------------- | ----------------------------- | --------------------------- |
+| Z/S                     | 55% (22 flags)                      | 0.07%                         | on (0.50 maybe, 0.50 sure)  |
+| final devoicing         | 17%                                 | 0.11%                         | on (0.50 maybe, 0.725 sure) |
+| th                      | 15%                                 | 0.06%                         | on (0.50 maybe, 0.50 sure)  |
+| w/v                     | 9%                                  | 0.00%                         | on (0.50 maybe, 0.50 sure)  |
+| sh/ch                   | 13% (16 flags, under the 20 needed) | 0.04%                         | on (0.50 maybe, 0.50 sure)  |
+| word stress             | 19%                                 | not tabulated                 | on (lead 1.15–1.25 maybe)   |
+| vowels                  | not measured per word               | not tabulated                 | on (natives' 0.5th pct.)    |
+| any other swapped sound | not measured yet                    | not measured yet              | on (natives' 0.5th pct.)    |
+| unreduced vowels        | not measured yet                    | not measured yet              | on (natives' 0.5th pct.)    |
 
-The confirmed vowel underlines have their own switch, the `vowel-patterns`
-entry of `thresholds.json`: they are drawn only when it says `"off": false`;
-no entry, or no file, is off. The accent profile and the "Your accent" panel
-do not depend on it: they only show.
+### Check your flags
 
-### Your own cut-offs: Check your flags
+The second tab of "Your accent", "Check your flags", helps you decide which
+switch to turn off. "Score my last 200 sentences" takes the newest 200 English
+pieces of prifly's dictation recordings (Settings, Dictation, "Keep recordings
+of my dictation"; only pieces with the microphone's full-rate audio) and scores
+them in the background on a worker of its own, two threads, one piece at a
+time, with a progress line and Cancel. Every candidate of every check is
+listed, the ones switched off included, at loose cut-offs: a contrast from
+posterior 0.5, word stress from its `maybe` lead, a vowel past the natives' 5th
+percentile, the other two from their cut-offs. Each row plays your own word
+("Yours"), says it right, and takes a Right or Wrong.
 
-The calibration's learners were Mandarin speakers; the second tab of "Your
-accent", "Check your flags", tailors the checks to the reader's own voice.
-"Score my last 200 sentences" takes the newest 200 English pieces of prifly's
-dictation recordings (Settings, Dictation, "Keep recordings of my dictation";
-only pieces with the microphone's full-rate audio) and scores them in the
-background on a worker of its own, two threads, one piece at a time, with a
-progress line and Cancel. Every candidate of every check is listed, the ones
-that are off included, at loose cut-offs: a contrast from posterior 0.5, word
-stress from its `maybe` lead, a vowel past the natives' 5th percentile. Each row
-plays the reader's own word ("Yours"), says it right, and takes a Right or Wrong.
-
-Per check, the lowest score at which at least 80% of the reader's marked flags at
-or above it are Right, with at least 15 of them, turns the check on for them
-from that score; 15 or more marks and no such score turn it off for them; fewer
-leave it as `thresholds.json` ships it. These settings are kept in `api.state`
-(`personal-cuts`) and sent with each piece to the worker, where they beat the
-file (`pronounce/personal.ts`, `withOverrides`). "Reset marks" clears them.
+Per check the tab shows how often you found it wrong, here and with "Not a
+mistake" in the session ("9 of 14 not a mistake"), and the name of the switch
+that turns it off. The marks switch nothing themselves (`pronounce/personal.ts`,
+kept in `api.state` as `flag-marks`). "Reset marks" clears them.
 
 prifly's extension api has no call for past dictation; the recordings are read
 where prifly's host writes them, `<prifly data>/dictation-recordings/`
@@ -161,13 +190,12 @@ below native speakers' 10th percentile (`pronounce/data/native-stats.json`, from
 (`panel/`) shows the three confirmed sounds furthest from native, the words they
 were heard in, and Yours and Say it right for one of them.
 
-A confirmed vowel can also come back as an underline (`pronounce/confirmed.ts`),
-but that is off as shipped (see "What ships now"): with the `vowel-patterns` entry
-of `thresholds.json` set to `"off": false`, a later word with that vowel is
-marked when its vowel sits below the natives' 0.5th percentile (at most 1 native
-word in 200) and sounds like the pattern's (the A in "cap" for the U in "cup");
-"sure" only beyond 1 in 2000. Without `native-stats.json` the profile only
-collects: the panel says so, and nothing is compared.
+A confirmed vowel also makes the Vowels check sure (`pronounce/confirmed.ts`): a
+later word with that vowel is marked "sure" when its vowel sits below the
+natives' 0.5th percentile (at most 1 native word in 200) and sounds like the
+pattern's (the A in "cap" for the U in "cup"), stressed or not. Without
+`native-stats.json` the profile only collects: the panel says so, nothing is
+compared, and the Vowels check marks nothing.
 
 ## What it downloads
 
@@ -308,25 +336,28 @@ memory and 4 cores, so run it deliberately, on a machine with room:
    as "t".
 3. The word gets its underline within a second or so, and the hint reads as
    above. `mcp__prifly__extension_status` shows the last error, if any.
+4. Switch "TH said as T, D, S or F" off in Settings → Extensions →
+   Pronunciation: the "three" underline goes at once; switch it on and it comes back.
 
 ## What is where
 
-| File                                                                                                        | What it is                                                          |
-| ----------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------- |
-| `prifly-extension.json`                                                                                     | The manifest, with `"dictation": { "audio": true }`                 |
-| `index.ts`                                                                                                  | `activate`: the extension with its real dependencies; `panel`       |
-| `pronounce/extension.ts`                                                                                    | Puts the runner and the coach together on the api                   |
-| `pronounce/coach.ts`                                                                                        | Dictation handlers, marks, "Not a mistake", the busy rule           |
-| `pronounce/voice.ts`, `box.ts`, `box/runner.py`, `wav.ts`, `play-shim.ts`                                   | Yours and Say it right: the clips, the GPU box, the box's script    |
-| `pronounce/runner.ts`, `status.ts`                                                                          | The worker's life (fetch, start, restart, stop) and the status line |
-| `pronounce/download.ts`, `models.ts`                                                                        | The sha256-pinned downloader and what it fetches                    |
-| `pronounce/worker.ts`, `serve.ts`, `phone-model.ts`, `engine.ts`, `lifetime.ts`                             | The worker process                                                  |
-| `pronounce/worker-pipe.ts`, `calls.ts`, `protocol.ts`, `pcm.ts`                                             | How the extension and the worker talk                               |
-| `pronounce/judge.ts`, `contrasts.ts`, `align.ts`, `ctc.ts`, `phones.ts`, `dictionary.ts`, `not-mistakes.ts` | The judging                                                         |
-| `pronounce/force-align.ts`, `thresholds.ts`, `gop.ts`, `pitch.ts`                                           | Sentence alignment, the checks' cut-offs, phone goodness and pitch  |
-| `pronounce/stress.ts`                                                                                       | Word stress: the sentence-scaled cues, the lead, the stress mark    |
-| `pronounce/scores.ts`, `profile.ts`, `native.ts`, `confirmed.ts`, `accent-words.ts`                         | The accent profile and its confirmed-pattern underlines             |
-| `pronounce/accent-panel.ts`, `panel/`                                                                       | The "Your accent" window: its data and its page                     |
-| `pronounce/flag-check.ts`, `flags.ts`, `scan-worker.ts`, `past-pieces.ts`, `resample.ts`, `personal.ts`     | Check your flags: the job, its flags, the reader's own cut-offs     |
-| `tools/calibrate/`                                                                                          | Measures natives and learners on a rented box (its `README.md`)     |
-| `test/`                                                                                                     | Tests over fakes                                                    |
+| File                                                                                                        | What it is                                                                                                                   |
+| ----------------------------------------------------------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------- |
+| `prifly-extension.json`                                                                                     | The manifest, with `"dictation": { "audio": true }`                                                                          |
+| `index.ts`                                                                                                  | `activate`: the extension with its real dependencies; `panel`                                                                |
+| `pronounce/extension.ts`                                                                                    | Puts the runner and the coach together on the api                                                                            |
+| `pronounce/coach.ts`, `drawn.ts`, `checks.ts`                                                               | Dictation handlers, marks, "Not a mistake", the busy rule; which marks the settings draw, the nine checks and their switches |
+| `pronounce/voice.ts`, `box.ts`, `box/runner.py`, `wav.ts`, `play-shim.ts`                                   | Yours and Say it right: the clips, the GPU box, the box's script                                                             |
+| `pronounce/runner.ts`, `status.ts`                                                                          | The worker's life (fetch, start, restart, stop) and the status line                                                          |
+| `pronounce/download.ts`, `models.ts`                                                                        | The sha256-pinned downloader and what it fetches                                                                             |
+| `pronounce/worker.ts`, `serve.ts`, `phone-model.ts`, `engine.ts`, `lifetime.ts`                             | The worker process                                                                                                           |
+| `pronounce/worker-pipe.ts`, `calls.ts`, `protocol.ts`, `pcm.ts`                                             | How the extension and the worker talk                                                                                        |
+| `pronounce/judge.ts`, `contrasts.ts`, `align.ts`, `ctc.ts`, `phones.ts`, `dictionary.ts`, `not-mistakes.ts` | The judging                                                                                                                  |
+| `pronounce/force-align.ts`, `thresholds.ts`, `gop.ts`, `pitch.ts`                                           | Sentence alignment, the checks' cut-offs, phone goodness and pitch                                                           |
+| `pronounce/stress.ts`                                                                                       | Word stress: the sentence-scaled cues, the lead, the stress mark                                                             |
+| `pronounce/any-sound.ts`, `weak-vowels.ts`, `vowels.ts`                                                     | Any other swapped sound, unreduced vowels, and the Vowels check                                                              |
+| `pronounce/scores.ts`, `profile.ts`, `native.ts`, `confirmed.ts`, `accent-words.ts`                         | The accent profile, its confirmed patterns, the cards' plain words                                                           |
+| `pronounce/accent-panel.ts`, `panel/`                                                                       | The "Your accent" window: its data and its page                                                                              |
+| `pronounce/flag-check.ts`, `flags.ts`, `scan-worker.ts`, `past-pieces.ts`, `resample.ts`, `personal.ts`     | Check your flags: the job, its flags, the reader's verdicts per check                                                        |
+| `tools/calibrate/`                                                                                          | Measures natives and learners on a rented box (its `README.md`)                                                              |
+| `test/`                                                                                                     | Tests over fakes                                                                                                             |

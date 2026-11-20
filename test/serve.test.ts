@@ -92,26 +92,104 @@ test("the worker loads the model on the threads it is given, and answers a piece
   expect(Math.abs((audio?.reduce((a, b) => a + b, 0) ?? 1) / 3)).toBeLessThan(1e-6);
 });
 
-test("the reader's own setting beats thresholds.json: on where the file has it off, off where on", async () => {
-  const { all } = await loaded([], { contrasts: { th: { off: true } } });
-  const on = { contrasts: { th: { off: false, maybe: 0.6 } } };
-  expect(await answerJudge({ ...TWO_WORDS, overrides: on }, all)).toMatchObject({
-    type: "marks",
-    marks: [{ index: 0, word: "three", sound: "th → t", level: "sure" }],
-  });
-  // A cut-off above the model's posterior (about 1 here) marks nothing.
-  const high = { contrasts: { th: { off: false, maybe: 1.01 } } };
-  expect(await answerJudge({ ...TWO_WORDS, overrides: high }, all)).toMatchObject({ marks: [] });
+/** Frames of logits by token: each row's tokens at their logit, the rest at 0. */
+function modelOf(
+  rows: readonly Record<string, number>[],
+  vocab: Record<string, number>,
+): PhoneModel {
+  const size = Object.keys(vocab).length;
+  return {
+    logits: async () => {
+      const data = new Float32Array(rows.length * size);
+      rows.forEach((row, t) => {
+        for (const [token, logit] of Object.entries(row))
+          data[t * size + (vocab[token] ?? 0)] = logit;
+      });
+      return { data, frames: rows.length, size };
+    },
+  };
+}
 
-  const { all: shipped } = await loaded([]);
-  expect(await answerJudge(TWO_WORDS, shipped)).toMatchObject({ marks: [{ index: 0 }] });
-  const off = { contrasts: { th: { off: true, maybe: 1 } } };
-  expect(await answerJudge({ ...TWO_WORDS, overrides: off }, shipped)).toMatchObject({ marks: [] });
-  // A setting for another check leaves this one as the file has it.
-  const other = { contrasts: { "z-s": { off: true, maybe: 1 } } };
-  expect(await answerJudge({ ...TWO_WORDS, overrides: other }, shipped)).toMatchObject({
-    marks: [{ index: 0 }],
+test("under the shipped files the worker marks with every check it makes: the contrasts, other swapped sounds, unreduced vowels", async () => {
+  const vocab = { ...VOCAB, dʒ: 8, ʌ: 9, s: 10, j: 11, ə: 12, b: 13, aʊ: 14, æ: 15 };
+  const folder = await mkdtemp(join(tmpdir(), "pronounce-"));
+  await writeFile(join(folder, "vocab.json"), JSON.stringify(vocab));
+  await writeFile(
+    join(folder, "britfone.csv"),
+    "THREE, θ ɹ ˈiː\nJUST, dʒ ˈʌ s t\nABOUT, ə b ˈaʊ t\n",
+  );
+  await writeFile(join(folder, "cmudict.dict"), "");
+  for (const name of ["thresholds.json", "native-stats.json"]) {
+    await writeFile(join(folder, name), await Bun.file(join("pronounce", "data", name)).text());
+  }
+  const rows = [
+    // "three" with a t, "just" with a y for its j, "about" with a full A for its weak one.
+    { "<pad>": 12 },
+    { t: 12 },
+    { ɹ: 12 },
+    { iː: 12 },
+    { "<pad>": 12 },
+    { j: 12, dʒ: 4 },
+    { ʌ: 12 },
+    { s: 12 },
+    { t: 12 },
+    { "<pad>": 12 },
+    { æ: 12, ə: 4 },
+    { b: 12 },
+    { aʊ: 12 },
+    { t: 12 },
+    { "<pad>": 12 },
+  ];
+  const args = {
+    model: join(folder, "model.onnx"),
+    vocab: join(folder, "vocab.json"),
+    dictionary: join(folder, "britfone.csv"),
+    cmudict: join(folder, "cmudict.dict"),
+    threads: 2,
+  };
+  const all = await loadAll(
+    args,
+    async () => modelOf(rows, vocab),
+    join(folder, "thresholds.json"),
+  );
+  const words = [
+    { word: "three", from: 0, to: 5 * 320 },
+    { word: "just", from: 5 * 320, to: 10 * 320 },
+    { word: "about", from: 10 * 320, to: 15 * 320 },
+  ];
+  const answer = await answerJudge({ op: "judge", id: "1", pcm: TWO_WORDS.pcm, words }, all);
+  expect(PronounceLine.parse(answer)).toMatchObject({ type: "marks" });
+  // Every card is under markDictation's 300 characters.
+  const marks = answer.type === "marks" ? answer.marks : [];
+  for (const one of marks) expect(one.fix.length).toBeLessThan(300);
+  expect(answer).toMatchObject({
+    type: "marks",
+    marks: [
+      {
+        index: 0,
+        check: "th",
+        level: "sure",
+        fix: "TH said as T. Tongue tip between the teeth, let the air through.",
+      },
+      {
+        index: 1,
+        check: "any-sound",
+        level: "sure",
+        said: "YUST",
+        say: "JUST",
+        fix: "Swapped sound. The J in 'just' came out as a Y. Start with the tongue touching, as for D, then let it go with your voice on.",
+      },
+      {
+        index: 2,
+        check: "weak-vowels",
+        level: "sure",
+        said: "a-BOWT",
+        say: "u-BOWT",
+        fix: "Unreduced vowel. The weak vowel in 'about' came out full, like the A in 'cap'. Say it short and weak: uh.",
+      },
+    ],
   });
+  expect(marks).toHaveLength(3);
 });
 
 test("a scan flags every check, the ones thresholds.json turns off too, with the scores for the vowels", async () => {

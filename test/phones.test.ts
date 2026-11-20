@@ -161,10 +161,18 @@ test("the plain fix is a sentence of its own for every swap, without slashes or 
     expect(fix).not.toMatch(/[/ɪʊəɛæɑɒɔʌθðʃʒŋɹːɡ→]/u);
     expect(fix.length).toBeLessThanOrEqual(200);
   }
-  expect(plainFix("z", "s", true)).toBe(
-    "The end came out as a hissing S. Keep buzzing to the end: Z.",
+  // The card's first words name the check, as its switch in Settings does.
+  expect(plainFix("z", "s", true)).toBe("Z said as S. Keep buzzing through the Z at the end.");
+  expect(plainFix("z", "s", false)).toBe("Z said as S. Buzz it: keep the voice on, not a hiss.");
+  expect(plainFix("d", "t", true)).toBe(
+    "Final D said as T. Keep your voice on through the D at the end.",
+  );
+  expect(plainFix("ð", "θ", true)).toBe(
+    "Final TH lost its voice. Keep buzzing through the TH at the end.",
   );
   expect(plainFix("θ", "t", false)).toBe(
-    "The TH (as in thin) came out as a T. Tongue tip between the teeth, let the air through.",
+    "TH said as T. Tongue tip between the teeth, let the air through.",
   );
+  expect(plainFix("w", "v", false)).toMatch(/^W said as V\. /u);
+  expect(plainFix("ʃ", "tʃ", false)).toMatch(/^SH said as CH\. /u);
 });

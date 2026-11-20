@@ -4,10 +4,14 @@
  * its words said with an accent feature marked (`markDictation`); a word
  * the reader corrected by hand judged again against the corrected word and
  * marked from where it stands in the box (`at`); and "Not a mistake" kept
- * in `api.state`, that word with what was heard in it never marked again.
- * A judged piece's content words also go into the accent profile
- * (`profile.ts`), and a vowel pattern it has confirmed adds its own marks
- * (`confirmed.ts`) to words no other check marked.
+ * in `api.state`, that word with what was heard in it never marked again,
+ * and counted as a Wrong verdict on its check (`personal.ts`). A judged
+ * piece's content words also go into the accent profile (`profile.ts`), and
+ * its stressed vowels are checked against the natives' here (`vowels.ts`).
+ *
+ * Every check's marks are kept; which are drawn is the reader's settings'
+ * (`drawn.ts`): the Underline setting and each check's switch. A setting
+ * changed redraws the marks already given.
  *
  * Dictation never waits on any of it: a handler keeps what it needs and
  * returns, and the judging runs after, one request at a time. While one
@@ -27,11 +31,20 @@ import type {
   ExtensionApi,
   SettingValues,
 } from "@prifly/extension-api";
-import { confirmedMarks } from "./confirmed";
 import { wordKey } from "./dictionary";
-import { type Judged, type JudgeWord, levelOf } from "./judge";
-import { Z_P05 } from "./native";
+import {
+  type Drawn,
+  drawnBy,
+  drawsNothing,
+  pickDrawn,
+  type Shown,
+  shownMark,
+  UNDERLINE,
+  UnderlineSwitch,
+} from "./drawn";
+import { inWordOrder, type Judged, type JudgeWord } from "./judge";
 import { isNotMistake, type NotMistake, StoredNotMistakes, withNotMistake } from "./not-mistakes";
+import type { Personal } from "./personal";
 import {
   type AudioFull,
   type FullPiece,
@@ -42,6 +55,7 @@ import {
 import type { AccentProfile, PieceAt } from "./profile";
 import type { Judgement } from "./scores";
 import { MIN_RATE, PIECE_RATE, type Voice } from "./voice";
+import { vowelMarks } from "./vowels";
 
 /** The id of the mark's own action; the window adds Listen itself. */
 export const NOT_A_MISTAKE = "not-a-mistake";
@@ -51,26 +65,8 @@ export const NOT_MISTAKES = "not-mistakes";
 export const PLAY_YOURS = "play-yours";
 export const PLAY_RIGHT = "play-right";
 
-/** The `underline` setting's options, as `prifly-extension.json` declares them: which marks are drawn. */
-export const UNDERLINE_SURE = "Sure mistakes only";
-export const UNDERLINE_ALL = "Sure and not sure";
-export const UNDERLINE_OFF = "Off";
-/** The setting's id in `api.settings`. */
-export const UNDERLINE = "underline";
-
-type Level = "sure" | "maybe";
-
-/** The levels each option of the `underline` setting draws; an unknown value is the default, sure only. */
-function allowedLevels(value: unknown): readonly Level[] {
-  if (value === UNDERLINE_OFF) return [];
-  return value === UNDERLINE_ALL ? ["sure", "maybe"] : ["sure"];
-}
-
 /** `markDictation`'s limits. */
 const MAX_LABEL = 64;
-const MAX_DETAIL = 300;
-/** `DictationMark`'s limit for `said` and `say`. */
-const MAX_SPELLING = 40;
 const MAX_MARKS = 200;
 /** Pieces of a session's last dictation kept for corrections: about 64 KB of audio a second each. */
 const KEPT_PIECES = 40;
@@ -109,15 +105,8 @@ type KeptPiece = {
   full?: AudioFull;
 };
 
-/** A mark as given, with the word and what was heard in it, for "Not a mistake", and how sure it is: whether it is drawn is the setting's. `from` and `to` are the word's samples in the piece's audio. */
-type Shown = {
-  mark: DictationMark;
-  word: string;
-  heard: string;
-  level: Level;
-  from: number;
-  to: number;
-};
+/** Optional parts of a coach: where "Not a mistake" counts as a Wrong verdict. */
+export type CoachOptions = { personal?: Pick<Personal, "mark"> | null };
 
 /** The marks given to one piece of a dictation, from `at` when a correction's. */
 type Group = { sessionId: string; dict: string; piece: number; at?: number; shown: Shown[] };
@@ -128,11 +117,6 @@ type Task = () => Promise<void>;
 export function isEnglish(language: string): boolean {
   const lower = language.toLowerCase();
   return lower === "en" || lower.startsWith("en-");
-}
-
-/** The hint line after the bold word: one plain line on the fix, no phonetic letters. */
-export function detailOf(judged: Pick<Judged, "fix">): string {
-  return judged.fix.slice(0, MAX_DETAIL);
 }
 
 const groupKey = (where: { sessionId: string; dict: string; piece: number; at?: number }) =>
@@ -155,10 +139,7 @@ export class Coach {
   private readonly judge: JudgeFn;
   private readonly voice: Pick<Voice, "yours" | "sayRight"> | null;
   private readonly profile: AccentProfile | null;
-  /** Whether the confirmed-pattern underlines are on: the reader's own setting (`personal.ts`), else `thresholds.json`'s; off unless one says so. */
-  private readonly patternsOn: () => boolean;
-  /** The native deviate a vowel must sit below for them: `Z_P05`, or the reader's own. */
-  private readonly patternCut: () => number;
+  private readonly personal: Pick<Personal, "mark"> | null;
   private notMistakes: NotMistake[] = [];
   /** Each session's last dictation: its id, and its pieces by number. */
   private readonly kept = new Map<string, { dict: string; pieces: Map<number, KeptPiece> }>();
@@ -166,42 +147,53 @@ export class Coach {
   private waiting: Task | null = null;
   private draining: Promise<void> | null = null;
   private stopped = false;
-  /** The levels drawn, from the `underline` setting as it is now. */
-  private allowed: readonly Level[];
+  /** Whether a kept "Sure mistakes only" counts as "Sure and not sure". */
+  private readonly switched: UnderlineSwitch;
+  /** What is drawn, from the settings as they are now. */
+  private drawn: Drawn;
 
   constructor(
     api: CoachApi,
     judge: JudgeFn,
     voice: Pick<Voice, "yours" | "sayRight"> | null = null,
     profile: AccentProfile | null = null,
-    patternsOn: () => boolean = () => false,
-    patternCut: () => number = () => Z_P05,
+    options: CoachOptions = {},
   ) {
-    this.patternsOn = patternsOn;
-    this.patternCut = patternCut;
     this.api = api;
     this.judge = judge;
     this.voice = voice;
     this.profile = profile;
-    this.allowed = allowedLevels(api.settings?.[UNDERLINE]);
+    this.personal = options.personal ?? null;
+    this.switched = new UnderlineSwitch(api.state, (event, fields) => api.log(event, fields));
+    this.drawn = drawnBy(api.settings, false);
     api.onSettings?.((values) => this.settingsChanged(values));
   }
 
-  /** The `underline` setting changed: the marks already given are drawn or taken away to match. */
+  /** A setting changed: an Underline the reader picked ends the switch, and the marks already given are drawn or taken away to match. */
   private settingsChanged(values: SettingValues): void {
     if (this.stopped) return;
-    const before = this.allowed;
-    this.allowed = allowedLevels(values[UNDERLINE]);
+    this.switched.changed(values[UNDERLINE]);
+    this.redraw(values);
+  }
+
+  /** The settings now are `values`: every group whose drawn marks change is given again. */
+  private redraw(values: SettingValues | undefined): void {
+    const before = this.drawn;
+    this.drawn = drawnBy(values, this.switched.active);
     for (const group of [...this.groups.values()]) {
-      const drawn = (levels: readonly Level[]) =>
-        group.shown.filter((one) => levels.includes(one.level)).length;
-      if (drawn(before) !== drawn(this.allowed)) this.show(group, true);
+      const was = pickDrawn(group.shown, before, MAX_MARKS);
+      const now = pickDrawn(group.shown, this.drawn, MAX_MARKS);
+      if (was.length !== now.length || was.some((one, at) => one !== now[at])) {
+        this.show(group, true);
+      }
     }
   }
 
-  /** The pairs the reader accepted before, from `api.state`. */
+  /** The pairs the reader accepted before, from `api.state`, and the Underline switch (`drawn.ts`). */
   async load(): Promise<void> {
     this.notMistakes = StoredNotMistakes.parse((await this.api.state?.get(NOT_MISTAKES)) ?? []);
+    await this.switched.load(this.api.settings?.[UNDERLINE]);
+    if (!this.stopped) this.redraw(this.api.settings);
   }
 
   /** A finished piece: kept, and its words judged once the work before it is done. */
@@ -211,7 +203,7 @@ export class Coach {
     if (piece.words.length === 0) return;
     const full = fullRateOf(piece);
     this.keep(piece, audio, full);
-    if (this.allowed.length === 0) return;
+    if (drawsNothing(this.drawn)) return;
     const spots = piece.words.map((word) => ({
       text: word.text,
       start: word.start,
@@ -223,7 +215,7 @@ export class Coach {
     this.run(async () => {
       const judged = await this.judge(audio, asked);
       if (judged === null) return;
-      const marks = [...judged.marks, ...this.patternMarks(judged, spots)];
+      const marks = inWordOrder([...judged.marks, ...this.vowelMarksOf(judged, spots)]);
       this.show({ ...where, shown: this.shownOf(marks, spots, full !== undefined) }, false);
       await this.learn(judged, spots, where);
     });
@@ -243,16 +235,14 @@ export class Coach {
     }
   }
 
-  /** The words underlined from a vowel pattern the profile has confirmed (`confirmed.ts`), where no other check marked them. */
-  private patternMarks(judged: Judgement, spots: readonly Spot[]): Judged[] {
-    if (this.profile === null || !this.patternsOn()) return [];
-    return confirmedMarks(
+  /** The Vowels check's marks of a judged piece (`vowels.ts`), from its scores, the natives' and the accent profile. */
+  private vowelMarksOf(judged: Judgement, spots: readonly Spot[]): Judged[] {
+    if (this.profile === null) return [];
+    return vowelMarks(
       judged.scores,
       spots.map((spot) => spot.text),
       this.profile.assessed(),
       this.profile.nativeStats(),
-      new Set(judged.marks.map((one) => one.index)),
-      this.patternCut(),
     );
   }
 
@@ -262,7 +252,7 @@ export class Coach {
     const kept = this.kept.get(correction.sessionId);
     const piece = kept?.dict === correction.dict ? kept.pieces.get(correction.piece) : undefined;
     const said = piece?.words.find((word) => wordKey(word.text) === wordKey(correction.heard));
-    if (piece === undefined || said === undefined || this.allowed.length === 0) return;
+    if (piece === undefined || said === undefined || drawsNothing(this.drawn)) return;
     const { sessionId, dict, word, start: at } = correction;
     const asked = [{ word, ...samplesOf(said) }];
     const spots = [{ text: word, start: 0, end: word.length, ...samplesOf(said) }];
@@ -282,14 +272,15 @@ export class Coach {
   }
 
   /**
-   * A click on a mark's action: "Not a mistake" keeps the pair and takes its marks away wherever
-   * they are; "Yours" and "Say it right" answer with the audio to play.
+   * A click on a mark's action: "Not a mistake" keeps the pair, takes its marks away wherever
+   * they are and counts as a Wrong verdict on the mark's check (`personal.ts`), which switches
+   * nothing; "Yours" and "Say it right" answer with the audio to play.
    */
   async action(click: DictationMarkClick): Promise<undefined | PlayResult> {
     const play = click.action === PLAY_YOURS || click.action === PLAY_RIGHT;
     if (this.stopped || (click.action !== NOT_A_MISTAKE && !play)) return undefined;
     const group = this.groups.get(groupKey(click));
-    const hit = group?.shown.find(
+    const hit = pickDrawn(group?.shown ?? [], this.drawn, MAX_MARKS).find(
       (one) => one.mark.start === click.markStart && one.mark.end === click.markEnd,
     );
     if (group === undefined || hit === undefined) {
@@ -298,16 +289,28 @@ export class Coach {
     }
     if (play) return this.play(click.action, group, hit);
     const { word, heard } = hit;
-    this.api.log("notMistake", { word, heard });
+    this.api.log("notMistake", { word, heard, check: hit.check });
     this.notMistakes = withNotMistake(this.notMistakes, word, heard);
     await this.api.state?.update(NOT_MISTAKES, (current) =>
       withNotMistake(StoredNotMistakes.parse(current ?? []), word, heard),
     );
+    await this.countWrong(group, hit);
     for (const group of [...this.groups.values()]) {
       const shown = group.shown.filter((one) => !isNotMistake([hit], one.word, one.heard));
       if (shown.length !== group.shown.length) this.show({ ...group, shown }, true);
     }
     return undefined;
+  }
+
+  /** "Not a mistake" on `hit` kept as a Wrong verdict on its check; a refused write is logged. */
+  private async countWrong(group: Group, hit: Shown): Promise<void> {
+    const id = `session#${groupKey(group).replaceAll("\n", "#")}#${hit.mark.start}#${hit.check}`;
+    try {
+      await this.personal?.mark(id, "wrong", hit.check, hit.score);
+    } catch (caught) {
+      if (!(caught instanceof Error)) throw caught;
+      this.api.log("verdictFailed", { error: caught.message });
+    }
   }
 
   /** The audio of a play action: the reader's own word, or the sentence (the word, for a correction) said right in their voice. */
@@ -429,33 +432,17 @@ export class Coach {
 
   /** `judged` as marks on `spots`, without the pairs the reader accepted and words too long to label. */
   private shownOf(judged: readonly Judged[], spots: readonly Spot[], full: boolean): Shown[] {
-    const shown = judged.flatMap((one): Shown[] => {
+    const actions: NonNullable<DictationMark["actions"]> = [
+      { id: NOT_A_MISTAKE, label: "Not a mistake", icon: "check" },
+      ...this.playActions(full),
+    ];
+    const levels = this.api.features?.includes("dictation-mark-levels") === true;
+    return judged.flatMap((one): Shown[] => {
       const spot = spots[one.index];
       if (spot === undefined || spot.text.length > MAX_LABEL) return [];
       if (isNotMistake(this.notMistakes, one.word, one.heard)) return [];
-      const level = one.level ?? levelOf(one.posterior);
-      const mark: DictationMark = {
-        start: spot.start,
-        end: spot.end,
-        label: spot.text,
-        detail: detailOf(one),
-        actions: [
-          { id: NOT_A_MISTAKE, label: "Not a mistake", icon: "check" },
-          ...this.playActions(full),
-        ],
-        // An older prifly refuses the fields, and draws every mark as sure.
-        ...(this.api.features?.includes("dictation-mark-levels") === true
-          ? {
-              level,
-              confidence: one.posterior,
-              said: one.said.slice(0, MAX_SPELLING),
-              say: one.say.slice(0, MAX_SPELLING),
-            }
-          : {}),
-      };
-      return [{ mark, word: one.word, heard: one.heard, level, from: spot.from, to: spot.to }];
+      return [shownMark(one, spot, actions, levels)];
     });
-    return shown.slice(0, MAX_MARKS);
   }
 
   /**
@@ -470,9 +457,9 @@ export class Coach {
     ];
   }
 
-  /** `group`'s marks of the levels allowed given to the window; with none, only when `always` (a correction's, or marks taken away). */
+  /** `group`'s marks the settings draw (`pickDrawn`) given to the window; with none, only when `always` (a correction's, or marks taken away). */
   private show(group: Group, always: boolean): void {
-    const drawn = group.shown.filter((one) => this.allowed.includes(one.level));
+    const drawn = pickDrawn(group.shown, this.drawn, MAX_MARKS);
     if (this.stopped || (group.shown.length === 0 && !always)) return;
     const key = groupKey(group);
     this.groups.delete(key);

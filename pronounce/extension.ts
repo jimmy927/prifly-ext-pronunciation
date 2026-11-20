@@ -1,10 +1,11 @@
 /**
  * The extension put together: on enable the runner fetches the model and
  * the dictionary and starts the worker, its state on the status line; the
- * coach hears dictation and marks words, and adds each judged piece to the
+ * coach hears dictation and marks words, every check on unless the reader
+ * switches it off in Settings (`checks.ts`), and adds each judged piece to the
  * accent profile, which the "Your accent" window shows (`accent-panel.ts`),
- * beside "Check your flags" (`flag-check.ts`), whose marks set the checks for
- * this reader (`personal.ts`); on disable the worker and any
+ * beside "Check your flags" (`flag-check.ts`), which tallies the reader's
+ * verdicts per check (`personal.ts`); on disable the worker and any
  * download on its way are stopped. What fetches and what starts the worker
  * are handed in (`StartDeps`), so tests run it over fakes; `index.ts` hands
  * in the real ones.
@@ -15,18 +16,18 @@ import { join } from "node:path";
 import type { ExtensionApi } from "@prifly/extension-api";
 import { AccentPanel } from "./accent-panel";
 import { SeedVcBox } from "./box";
+import { switchedOn } from "./checks";
 import { Coach } from "./coach";
 import { FlagCheck, type FlagCheckDeps } from "./flag-check";
 import { ensurePronounce, priflyDataDir } from "./models";
 import { loadNativeStats, type NativeStats } from "./native";
 import { RECORDINGS_FOLDER, readPast, recentPieces } from "./past-pieces";
-import { Personal, vowelSetting } from "./personal";
+import { Personal } from "./personal";
 import type { OnMarkAction } from "./play-shim";
 import { AccentProfile } from "./profile";
 import { PronounceRunner, type RunnerDeps } from "./runner";
 import { startScanWorker } from "./scan-worker";
 import { statusLine } from "./status";
-import { type CheckId, loadShipped, loadVowelPatterns } from "./thresholds";
 import { readReference, Voice } from "./voice";
 import { spawnPronounce } from "./worker-pipe";
 
@@ -35,14 +36,10 @@ export type StartDeps = Pick<RunnerDeps, "ensure" | "spawn" | "backoffMs"> & {
   voice?: Voice;
   /** The natives' statistics (`native.ts`); left out, `NATIVE_STATS_PATH` is read. */
   natives?: () => Promise<NativeStats | null>;
-  /** Whether the confirmed-pattern vowel underlines are on (`loadVowelPatterns`); left out, `thresholds.json` is read. */
-  vowelPatterns?: () => Promise<boolean>;
   /** Clock for the accent profile; tests set it. */
   now?: () => number;
   /** The reader's past dictation for "Check your flags" (`past-pieces.ts`); left out, there is none. */
   past?: Pick<FlagCheckDeps, "list" | "read">;
-  /** The checks `thresholds.json` ships on (`loadShipped`); left out, the file is read. */
-  shipped?: () => Promise<ReadonlySet<CheckId>>;
 };
 
 /** What the extension needs of prifly: the dictation api, 0.16 and later. */
@@ -84,19 +81,14 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
   let natives: NativeStats | null = null;
   const profile = new AccentProfile(api.state, () => natives, deps.now);
   const personal = new Personal(api.state);
-  let patternsOn = false;
-  // The reader's own settings from their marks beat thresholds.json's (`personal.ts`).
-  const vowels = () => vowelSetting(personal.results(), patternsOn);
   const coach = new Coach(
     api,
-    (audio, words) => runner.judge(audio, words, personal.overrides()),
+    (audio, words) => runner.judge(audio, words),
     deps.voice ?? null,
     profile,
-    () => vowels().on,
-    () => vowels().deviate,
+    { personal },
   );
   const sayRight = () => (String(api.settings?.[VOICE_BOX] ?? "").trim() === "" ? NO_BOX : null);
-  let shipped: ReadonlySet<CheckId> = new Set();
   const flags = new FlagCheck({
     state: api.state,
     personal,
@@ -106,7 +98,7 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
       (() => Promise.reject(new Error("No past dictation is read without prifly's recordings"))),
     worker: (signal) => startScanWorker(deps, signal),
     natives: () => natives,
-    shipped: () => shipped,
+    switchedOn: () => switchedOn(api.settings),
     voice: deps.voice ?? null,
     sayRight,
     ...(deps.now === undefined ? {} : { now: deps.now }),
@@ -121,17 +113,11 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
   void profile.load();
   void personal.load();
   void flags.load();
-  void (deps.shipped ?? (() => loadShipped()))().then((on) => {
-    shipped = on;
-  });
   const readNatives =
     deps.natives ??
     (() => loadNativeStats(undefined, (why) => api.log("nativeStatsIgnored", { why })));
   void readNatives().then((stats) => {
     natives = stats;
-  });
-  void (deps.vowelPatterns ?? (() => loadVowelPatterns()))().then((on) => {
-    patternsOn = on;
   });
   void runner.start();
   api.log("activated", {});

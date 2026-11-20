@@ -9,8 +9,8 @@
  */
 
 import { z } from "zod";
+import { CHECK_IDS } from "./checks";
 import { CONTRAST_IDS } from "./contrasts";
-import { CHECK_IDS } from "./thresholds";
 
 const Words = z.array(
   z.strictObject({
@@ -20,23 +20,12 @@ const Words = z.array(
   }),
 );
 
-/** The reader's own setting of a check (`personal.ts`): on from `maybe` up, or off. */
-const Override = z.strictObject({ off: z.boolean(), maybe: z.number() });
-
-/** The reader's own settings, which beat `thresholds.json`'s for the checks they name. */
-export const Overrides = z.strictObject({
-  contrasts: z.partialRecord(z.enum(CONTRAST_IDS), Override).optional(),
-  stress: Override.optional(),
-});
-export type Overrides = z.infer<typeof Overrides>;
-
 /** `pcm`: the piece's 16 kHz mono float32 samples, little-endian, base64; each word's samples in it. */
 export const JudgeRequest = z.strictObject({
   op: z.literal("judge"),
   id: z.string(),
   pcm: z.string(),
   words: Words,
-  overrides: Overrides.optional(),
 });
 export type JudgeRequest = z.infer<typeof JudgeRequest>;
 
@@ -61,6 +50,8 @@ export const Flag = z.strictObject({
 
 export const Judged = z.strictObject({
   index: z.number().int().min(0),
+  /** The check that heard it (`checks.ts`): its switch decides whether it is drawn. */
+  check: z.enum(CHECK_IDS),
   word: z.string(),
   heard: z.string(),
   expected: z.string(),

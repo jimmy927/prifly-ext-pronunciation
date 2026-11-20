@@ -36,6 +36,9 @@ const vocab = new Vocab([
   "ɪ",
   "ʃ",
   "ʒ",
+  "z",
+  "ð",
+  "f",
 ]);
 const dictionary = parseDictionary(
   "THREE, θ ɹ ˈiː\nBAD, b ˈæ d\nWORSE, w ˈɜː s\nWATER(1), w ˈɔː t ə\nTAB, t ˈæ b\nTHAT, ð ˈæ t\n" +
@@ -69,6 +72,7 @@ test("a th the model was sure was a t marks the word, with the sound and how to 
   expect(judgeWords(post, vocab, dictionary, [word("three", 6)])).toEqual([
     {
       index: 0,
+      check: "th",
       word: "three",
       heard: "tɹiː",
       expected: "θɹiː",
@@ -78,7 +82,7 @@ test("a th the model was sure was a t marks the word, with the sound and how to 
       level: "sure",
       said: "TREE",
       say: "THREE",
-      fix: "The TH (as in thin) came out as a T. Tongue tip between the teeth, let the air through.",
+      fix: "TH said as T. Tongue tip between the teeth, let the air through.",
     },
   ]);
 });
@@ -102,7 +106,30 @@ test("a final d heard as t is respelt, and its fix has no phonetic letters or sl
   const [judged] = judgeWords(post, vocab, dictionary, [word("bad", 5)]);
   expect(judged?.said).toBe("BATT");
   expect(judged?.say).toBe("BADD");
-  expect(judged?.fix).toBe("The end came out as a T. Keep the voice on to the end: D.");
+  expect(judged?.fix).toBe("Final D said as T. Keep your voice on through the D at the end.");
+  expect(judged?.check).toBe("final-devoicing");
+});
+
+test("a final z heard as s is the Z said as S check to the reader, at final devoicing's cut-offs", () => {
+  const fizz = parseDictionary("FIZZ, f ˈɪ z\n");
+  const post = framesOf([{ f: 0.9 }, { ɪ: 0.9 }, blank, { s: 0.6 }, blank]);
+  const thresholds = parseThresholds({
+    contrasts: { "z-s": { maybe: 0.9 }, "final-devoicing": { maybe: 0.5, sure: 0.55 } },
+  });
+  expect(judgeWords(post, vocab, fizz, [word("fizz", 5)], thresholds)).toMatchObject([
+    { check: "z-s", level: "sure", fix: "Z said as S. Keep buzzing through the Z at the end." },
+  ]);
+});
+
+test("a word two checks mark keeps a mark of each, in the checks' order", () => {
+  // "thab" (th, a, b) said with a d for its th and a p for its final b.
+  const post = framesOf([{ d: 0.9 }, { æ: 0.9 }, blank, { p: 0.9 }, blank]);
+  const own = parseDictionary("THAB, ð ˈæ b\n");
+  const judged = judgeWords(post, vocab, own, [word("thab", 5)]);
+  expect(judged.map((one) => [one.index, one.check])).toEqual([
+    [0, "final-devoicing"],
+    [0, "th"],
+  ]);
 });
 
 test("a t the model was not sure of over the th is no mark", () => {

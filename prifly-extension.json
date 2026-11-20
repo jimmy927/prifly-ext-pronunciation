@@ -1,7 +1,7 @@
 {
   "id": "pronunciation",
   "name": "Pronunciation",
-  "description": "Underlines the words of your English dictation said with a German or Swedish accent feature (th, z, w and v, final voicing), with how to say them.",
+  "description": "Underlines the words of your English dictation said with an accent feature (th, z, w and v, final voicing, other swapped sounds, word stress, vowels), with how to say them; one switch per check.",
   "version": "0.3.0",
   "main": "index.ts",
   "dictation": { "audio": true },
@@ -19,10 +19,73 @@
     {
       "id": "underline",
       "label": "Underline",
-      "description": "Which words get the wavy underline. A mark is sure when the model was at least 88% sure of the sound, otherwise not sure.",
+      "description": "Which marks are drawn. A mark is sure when native speakers get it on at most 1 word in 1000, otherwise not sure.",
       "type": "select",
-      "default": "Sure mistakes only",
+      "default": "Sure and not sure",
       "options": ["Sure mistakes only", "Sure and not sure", "Off"]
+    },
+    {
+      "id": "checkZs",
+      "label": "Z said as S",
+      "description": "please, these, was: the Z loses its buzz.",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "id": "checkFinalD",
+      "label": "Final D said as T",
+      "description": "did, need, could: the voice stops before the D.",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "id": "checkTh",
+      "label": "TH said as T, D, S or F",
+      "description": "three, this, think.",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "id": "checkWv",
+      "label": "W and V swapped",
+      "description": "we, very, wave.",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "id": "checkShCh",
+      "label": "SH, CH and J swapped",
+      "description": "shop, chip, job.",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "id": "checkAnySound",
+      "label": "Any other swapped sound",
+      "description": "Every sound the model heard as another: the J in just said as Y, R, L. The noisiest check.",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "id": "checkStress",
+      "label": "Word stress",
+      "description": "DEV-eloper for de-VEL-oper: the wrong syllable stressed.",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "id": "checkVowels",
+      "label": "Vowels",
+      "description": "much said like match, go held as one still sound: a vowel natives almost never say that way.",
+      "type": "boolean",
+      "default": true
+    },
+    {
+      "id": "checkWeakVowels",
+      "label": "Unreduced vowels",
+      "description": "The A in about or the O in today said full instead of a weak uh.",
+      "type": "boolean",
+      "default": true
     },
     {
       "id": "voiceBox",

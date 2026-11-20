@@ -5,11 +5,15 @@ speechocean762, l2arctic, with CORPORA/<corpus>/labels.jsonl from fetch.py) and 
 
   OUT/thresholds.json    per check: the lowest posterior cut-off ("maybe") at which
                          natives get at most 1 flag per 200 judged words, "sure" at 1 per
-                         1000; "off": true when learners' flags at "maybe" are right
-                         less than 80% of the time, too few to tell, or no cut-off is low
-                         enough on natives; and the same for word stress ("stress": per cue combination the
-                         lead cut-offs, natives at 1 per 200 and 1 per 1000 read words; it
-                         ships only on learners' word stress scores, `decide_stress`)
+                         1000, never stricter than the 0.70 / 0.88 the extension had before
+                         a calibration; and the same for word stress ("stress": per cue
+                         combination the lead cut-offs, natives at 1 per 200 and 1 per 1000
+                         read words, `decide_stress`), and for any other swapped sound and
+                         unreduced vowels ("any-sound", "weak-vowels": the native deviate a
+                         word's worst sound must reach, never looser than the natives' 0.5th
+                         percentile, `decide_deviate`). Every check is written "off": false:
+                         whether one is drawn is the reader's switch in Settings; how often
+                         learners' flags are right (the 80% bar) is said in "why" and the report
   OUT/native-stats.json  per phone and per vowel the natives' LPR percentiles, per vowel
                          the length percentiles, and the natives' stress margins (per cue,
                          and the leads pronounce/stress.ts measures, per cue combination)
@@ -43,6 +47,18 @@ PERCENTILES = [0.5, 1, 5, 10, 25, 50, 75, 90, 95, 99]
 # The cut-offs tried, 0.500 to 0.995: below a half the heard phone was barely the likeliest at all.
 GRID = [round(0.50 + 0.005 * step, 3) for step in range(100)]
 TODAY = 0.70
+# The cut-offs the extension had before any calibration (pronounce/thresholds.ts): never stricter.
+DEFAULT_MAYBE, DEFAULT_SURE = 0.70, 0.88
+
+# Any other swapped sound and unreduced vowels (pronounce/any-sound.ts, weak-vowels.ts): a word is
+# flagged when its worst candidate's native deviate (pronounce/native.ts) is at or below the cut-off.
+DEVIATE_CHECKS = {"any-sound": "anySound", "weak-vowels": "weakVowels"}
+# native.ts's normal deviates of the percentiles, and its least natives for a curve.
+Z_OF = {0.5: -2.5758, 1: -2.3263, 5: -1.6449, 10: -1.2816, 25: -0.6745, 50: 0.0, 75: 0.6745, 90: 1.2816, 95: 1.6449, 99: 2.3263}
+MIN_NATIVE = 100
+Z_P05, Z_P01 = -2.5758, -3.0902
+# The deviate cut-offs tried: from the natives' 0.5th percentile (never looser) down, 0.05 apart.
+DEVIATE_GRID = [round(Z_P05 - 0.05 * step, 4) for step in range(120)]
 
 # Word stress, as pronounce/stress.ts reads it (test/fixtures/stress-sentence.json holds both to the same numbers).
 STRESS = "stress"
@@ -250,6 +266,9 @@ class Tally:
         # Vowels of a dump from before dump.ts measured them over the stretch they own (no "from"):
         # their length is the aligned frames', 20 ms nearly always.
         self.unspanned = 0
+        # Any other swapped sound and unreduced vowels, per native judged word of a dump that has
+        # them: its candidates as (expected phone, LPR); words of a dump from before them are not counted.
+        self.native_deviate: dict[str, list[list[tuple[str, float]]]] = defaultdict(list)
 
     def count_unspanned(self, records: list[dict]) -> None:
         self.unspanned += sum(1 for record in records for vowel in record["vowels"] if "from" not in vowel)
@@ -272,6 +291,10 @@ class Tally:
             if not record["judged"]:
                 continue
             self.native_judged += 1
+            for check, field in DEVIATE_CHECKS.items():
+                if field in record:
+                    found = [(c.get("expected", "ə"), c["lpr"]) for c in record[field]]
+                    self.native_deviate[check].append(found)
             peaks: dict[str, float] = {}
             for candidate in record["candidates"]:
                 if eligible(candidate):
@@ -350,22 +373,85 @@ def learner_numbers(rows: list[tuple], cut: float | None, corpus: str | None = N
 
 
 def decide(tally: Tally, args) -> dict:
+    """Each contrast's cut-offs from natives, never stricter than the defaults; `bar`: why learners' flags miss the ship bar, "" when they meet it."""
     out = {}
     for check in CHECKS:
-        maybe = lowest_cut(tally, check, args.fa_rate)
-        sure = lowest_cut(tally, check, args.sure_fa_rate)
-        if maybe is not None and sure is not None:
-            sure = max(sure, maybe)
+        maybe = min(lowest_cut(tally, check, args.fa_rate) or DEFAULT_MAYBE, DEFAULT_MAYBE)
+        sure = min(lowest_cut(tally, check, args.sure_fa_rate) or DEFAULT_SURE, DEFAULT_SURE)
+        sure = max(sure, maybe)
         learners = learner_numbers(tally.learner[check], maybe)
-        if maybe is None:
-            why = "no cut-off keeps natives under the false-alarm rate"
-        elif learners["matched"] < args.min_flags:
-            why = f"only {learners['matched']} labelled learner flags (need {args.min_flags})"
+        if learners["matched"] < args.min_flags:
+            bar = f"only {learners['matched']} labelled learner flags (need {args.min_flags})"
         elif learners["precision"] < args.min_precision:
-            why = f"precision {learners['precision']:.2f} under {args.min_precision:.2f}"
+            bar = f"precision {learners['precision']:.2f} under {args.min_precision:.2f}"
         else:
-            why = ""
-        out[check] = {"maybe": maybe, "sure": sure, "learners": learners, "off": why != "", "why": why}
+            bar = ""
+        precision = "–" if learners["precision"] is None else f"{learners['precision']:.2f}"
+        why = (
+            f"natives: {native_rate(tally, check, maybe):.2%} of words at {maybe:.3f}; "
+            f"learner precision {precision} on {learners['matched']} labelled flags"
+        )
+        out[check] = {"maybe": maybe, "sure": sure, "learners": learners, "off": False, "bar": bar, "why": why}
+    return out
+
+
+def curve_of(summary_: dict) -> list[tuple[float, float]] | None:
+    """pronounce/native.ts's curve of a summary: (value, z) points in rising order; None for too few natives."""
+    points = [(summary_[f"p{p}"], z) for p, z in Z_OF.items() if summary_.get(f"p{p}") is not None]
+    rising = all(b[0] >= a[0] for a, b in zip(points, points[1:]))
+    return points if summary_["n"] >= MIN_NATIVE and len(points) >= 2 and rising else None
+
+
+def deviate_of(curve: list[tuple[float, float]], lpr: float) -> float:
+    """pronounce/native.ts's `deviateOf`: `lpr` read off the line between the two points around it, the end ones carried on."""
+    at = 1
+    while at < len(curve) - 1 and curve[at][0] < lpr:
+        at += 1
+    (ax, az), (bx, bz) = curve[at - 1], curve[at]
+    return az if bx == ax else az + (lpr - ax) * (bz - az) / (bx - ax)
+
+
+class NativeWorst:
+    """A natives'-scale check's native judged words: each one's worst candidate deviate (None: no candidate)."""
+
+    def __init__(self, tally: Tally, check: str) -> None:
+        curves = (
+            {"ə": curve_of(summary(tally.vowel_lpr["ə"]))}
+            if check == "weak-vowels"
+            else {phone: curve_of(summary(values)) for phone, values in tally.phone_lpr.items()}
+        )
+        self.n = len(tally.native_deviate[check])
+        self.worst = sorted(
+            min(deviates)
+            for found in tally.native_deviate[check]
+            if (deviates := [deviate_of(c, lpr) for phone, lpr in found if (c := curves.get(phone)) is not None])
+        )
+
+    def rate(self, cut: float) -> float:
+        """Native judged words flagged at deviate `cut`, per word."""
+        return math.inf if self.n == 0 else bisect.bisect_right(self.worst, cut) / self.n
+
+    def loosest(self, rate: float) -> float | None:
+        return next((cut for cut in DEVIATE_GRID if self.rate(cut) <= rate), None)
+
+
+def decide_deviate(tally: Tally, args) -> dict:
+    """Any other swapped sound and unreduced vowels: natives set the deviate a word's worst sound must reach."""
+    out = {}
+    for check in DEVIATE_CHECKS:
+        natives = NativeWorst(tally, check)
+        maybe = natives.loosest(args.fa_rate) if natives.n else None
+        sure = natives.loosest(args.sure_fa_rate) if natives.n else None
+        if natives.n == 0:
+            why = "not measured: the dump predates these candidates; run the dump step again"
+        elif maybe is None or sure is None:
+            why = f"no cut-off down to {DEVIATE_GRID[-1]} keeps natives under the false-alarm rate"
+        else:
+            why = f"natives: {natives.rate(maybe):.2%} of {natives.n} judged words at {maybe}"
+        maybe = Z_P05 if maybe is None else maybe
+        sure = min(maybe, Z_P01 if sure is None else sure)
+        at_p05 = natives.rate(Z_P05) if natives.n else None
+        out[check] = {"n": natives.n, "maybe": maybe, "sure": sure, "rateAtP05": at_p05, "off": False, "why": why}
     return out
 
 
@@ -413,7 +499,7 @@ def stress_learner_numbers(rows: list[tuple], cuts: dict, corpus: str | None = N
 
 
 def decide_stress(tally: Tally, args) -> dict:
-    """Word stress: natives set each combination's lead cut-offs, learners with stress scores decide whether it ships."""
+    """Word stress: natives set each combination's lead cut-offs; `bar` says whether learners' flags meet the ship bar. It is never written off: the reader's switch decides."""
     combos = {}
     for combo in COMBOS:
         natives = NativeLeads(tally.stress_native, combo)
@@ -432,21 +518,23 @@ def decide_stress(tally: Tally, args) -> dict:
     cuts = {combo: c["maybe"] for combo, c in combos.items() if c["maybe"] is not None and c["sure"] is not None}
     learners = stress_learner_numbers(tally.stress_learner, cuts)
     if not cuts:
-        why = f"no cut-off keeps natives under the false-alarm rate on at least {args.min_stress_words} native words"
+        bar = f"no cut-off keeps natives under the false-alarm rate on at least {args.min_stress_words} native words"
     elif learners["labelledWords"] == 0:
-        why = "no learner stress labels: natives alone cannot show the flags are right"
+        bar = "no learner stress labels: natives alone cannot show the flags are right"
     elif learners["matched"] < args.min_flags:
-        why = f"only {learners['matched']} labelled learner flags (need {args.min_flags})"
+        bar = f"only {learners['matched']} labelled learner flags (need {args.min_flags})"
     elif learners["precision"] < args.min_precision:
-        why = f"precision {learners['precision']:.2f} under {args.min_precision:.2f}"
+        bar = f"precision {learners['precision']:.2f} under {args.min_precision:.2f}"
     else:
-        why = ""
-    return {"combos": combos, "learners": learners, "off": why != "", "why": why}
+        bar = ""
+    precision = "–" if learners["precision"] is None else f"{learners['precision']:.2f}"
+    why = f"learner precision {precision} on {learners['matched']} scored flags" + (f" ({bar})" if bar else "")
+    return {"combos": combos, "learners": learners, "off": False, "bar": bar, "why": why}
 
 
-def thresholds_json(decided: dict, source: str, stress: dict | None = None) -> dict:
+def thresholds_json(decided: dict, source: str, stress: dict | None = None, deviate: dict | None = None) -> dict:
     contrasts = {}
-    for check, d in decided.items():
+    for check, d in [*decided.items(), *(deviate or {}).items()]:
         entry: dict = {"off": d["off"]}
         if d["maybe"] is not None:
             entry["maybe"] = d["maybe"]
@@ -514,7 +602,27 @@ def stale_lengths(tally: Tally) -> bool:
     return tally.unspanned > 0
 
 
-def report(tally: Tally, decided: dict, stress: dict, args) -> str:
+def deviate_report(deviate: dict, args) -> list[str]:
+    lines = [
+        "",
+        "## Any other swapped sound and unreduced vowels",
+        "",
+        "How they are judged (pronounce/any-sound.ts, weak-vowels.ts; the candidates written by dump.ts): a "
+        "content word's consonant that lost to another English consonant (none of the five named swaps, not its "
+        "neighbour), or its unstressed schwa that lost to a full vowel, placed among the natives' goodness for "
+        "that phone (native-stats.json) as a normal deviate. Natives set the cut-off: the loosest deviate, from "
+        f"their 0.5th percentile ({Z_P05}) down, at which at most {args.fa_rate:.4f} of their judged words "
+        f"would be marked (`maybe`), {args.sure_fa_rate:.4f} (`sure`). No learner labels are read for these.",
+        "",
+        "| check | native judged words | native rate at the 0.5th percentile | maybe | sure | |",
+        "|---|---|---|---|---|---|",
+    ]
+    for check, d in deviate.items():
+        lines.append(f"| {check} | {d['n']} | {fmt(d['rateAtP05'], 4)} | {fmt(d['maybe'])} | {fmt(d['sure'])} | {d['why']} |")
+    return lines
+
+
+def report(tally: Tally, decided: dict, stress: dict, args, deviate: dict | None = None) -> str:
     lines = [
         "# Calibration report",
         "",
@@ -533,7 +641,9 @@ def report(tally: Tally, decided: dict, stress: dict, args) -> str:
         "## Checks",
         "",
         f"Native false-alarm budget: {args.fa_rate:.4f} per judged word for maybe, "
-        f"{args.sure_fa_rate:.4f} for sure; ship bar: precision ≥ {args.min_precision:.2f} on at least "
+        f"{args.sure_fa_rate:.4f} for sure, never stricter than {DEFAULT_MAYBE:.2f} / {DEFAULT_SURE:.2f}; "
+        "every check ships on, and the reader switches off in Settings what they find wrong. The bar column "
+        f"says whether learners' flags meet precision ≥ {args.min_precision:.2f} on at least "
         f"{args.min_flags} labelled learner flags. A learner flag is right when the raters scored that phone "
         f"under {ERROR_SCORE} (speechocean762, 0 to 2 per phone) or annotated it as an error (L2-ARCTIC); strict "
         "also needs the perceived phone to be the one flagged (speechocean762 names it only for phones scored "
@@ -541,7 +651,7 @@ def report(tally: Tally, decided: dict, stress: dict, args) -> str:
         "pronunciation with the raters' phones. Recall counts the labelled swaps of that kind found.",
         "",
         "| check | native flags/word at 0.70 | maybe | native rate at maybe | sure | learner flags | labelled | "
-        "precision | strict | recall | ships |",
+        "precision | strict | recall | bar |",
         "|---|---|---|---|---|---|---|---|---|---|---|",
     ]
     for check, d in decided.items():
@@ -550,7 +660,7 @@ def report(tally: Tally, decided: dict, stress: dict, args) -> str:
         lines.append(
             f"| {check} | {fmt(native_rate(tally, check, TODAY), 4)} | {fmt(d['maybe'])} | {fmt(at_maybe, 4)} | "
             f"{fmt(d['sure'])} | {learners['flags']} | {learners['matched']} | {fmt(learners['precision'])} | "
-            f"{fmt(learners['strict'])} | {fmt(learners['recall'])} | {'off: ' + d['why'] if d['off'] else 'yes'} |"
+            f"{fmt(learners['strict'])} | {fmt(learners['recall'])} | {d['bar'] or 'meets it'} |"
         )
     lines += ["", "Per learner corpus, at each check's maybe cut-off:", ""]
     lines += ["| check | corpus | flags | labelled | precision | strict | recall |", "|---|---|---|---|---|---|---|"]
@@ -594,6 +704,8 @@ def report(tally: Tally, decided: dict, stress: dict, args) -> str:
         share = sum(wins) / len(wins) if wins else None
         lines.append(f"| {cue} | {s['n']} | {fmt(s['p5'])} | {fmt(s['p10'])} | {fmt(s['p25'])} | {fmt(s['p50'])} | {fmt(s['p75'])} | {fmt(share)} |")
     lines += stress_report(tally, stress, args)
+    if deviate is not None:
+        lines += deviate_report(deviate, args)
     return "\n".join(lines) + "\n"
 
 
@@ -613,10 +725,10 @@ def stress_report(tally: Tally, stress: dict, args) -> list[str]:
         "",
         f"Natives set the cut-offs per combination: the lowest lead at which at most {args.fa_rate:.4f} of "
         f"their read words would be marked (`maybe`), {args.sure_fa_rate:.4f} (`sure`), on at least "
-        f"{args.min_stress_words} native words. It ships only when learners' flags are right at least "
-        f"{args.min_precision:.0%} of the time on at least {args.min_flags} flags the raters scored: a flag is "
-        f"right when speechocean762 scored the word's stress under {STRESS_WRONG} (5: wrong; 10: right). "
-        "L2-ARCTIC has no stress labels. Without learner stress scores the check stays off: a native "
+        f"{args.min_stress_words} native words. It ships on, as every check; the bar says whether learners' "
+        f"flags are right at least {args.min_precision:.0%} of the time on at least {args.min_flags} flags the "
+        f"raters scored: a flag is right when speechocean762 scored the word's stress under {STRESS_WRONG} "
+        "(5: wrong; 10: right). L2-ARCTIC has no stress labels; without learner stress scores a native "
         "false-alarm cap alone says how rarely natives are flagged, not how often a learner's flag is right.",
         "",
         "| combination | native words read | native rate at lead 0.05 | maybe | native rate at maybe | sure |",
@@ -639,8 +751,8 @@ def stress_report(tally: Tally, stress: dict, args) -> list[str]:
             f"| {corpus} | {read} | {n['labelledWords']} | {n['labelledWrong']} | {n['flags']} | {n['matched']} | "
             f"{fmt(n['precision'])} | {fmt(n['recall'])} |"
         )
-    verdict = "off: " + stress["why"] if stress["off"] else "yes"
-    lines += ["", f"Ships: {verdict} (all learners: {learners['matched']} scored flags, precision {fmt(learners['precision'])})."]
+    verdict = stress["bar"] or "meets it"
+    lines += ["", f"Bar: {verdict} (all learners: {learners['matched']} scored flags, precision {fmt(learners['precision'])})."]
     return lines
 
 
@@ -695,12 +807,13 @@ def main(argv: list[str] | None = None) -> None:
         )
     decided = decide(tally, args)
     stress = decide_stress(tally, args)
+    deviate = decide_deviate(tally, args)
     args.out.mkdir(parents=True, exist_ok=True)
     source = ", ".join(f"{name} {c['utterances']}" for name, c in sorted(tally.corpora.items()))
-    thresholds = thresholds_json(decided, source, stress)
+    thresholds = thresholds_json(decided, source, stress, deviate)
     (args.out / "thresholds.json").write_text(json.dumps(thresholds, indent=2) + "\n")
     (args.out / "native-stats.json").write_text(json.dumps(native_stats(tally), ensure_ascii=False, indent=1) + "\n")
-    args.report.write_text(report(tally, decided, stress, args), encoding="utf-8")
+    args.report.write_text(report(tally, decided, stress, args, deviate), encoding="utf-8")
     print(f"stats: wrote {args.out / 'thresholds.json'}, {args.out / 'native-stats.json'}, {args.report}")
 
 

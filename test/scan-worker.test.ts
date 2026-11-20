@@ -2,7 +2,7 @@ import { expect, test } from "bun:test";
 import { start } from "../pronounce/extension";
 import { FLAGS } from "../pronounce/flag-check";
 import type { PastPiece } from "../pronounce/past-pieces";
-import { CUTS } from "../pronounce/personal";
+import { MARKS, parseMarks, tallyOf } from "../pronounce/personal";
 import { JudgeRequest, type PronounceArgs, ScanRequest } from "../pronounce/protocol";
 import { SCAN_THREADS, startScanWorker } from "../pronounce/scan-worker";
 import { fakeDictation, threeTrees } from "./fake-dictation";
@@ -87,14 +87,13 @@ const PAST: PastPiece = {
   rate: 48_000,
 };
 
-test("in the extension: the job scores past pieces on a worker of its own, and the reader's marks reach the judge", async () => {
-  const fake = fakeDictation();
+test("in the extension: the job scores past pieces on a worker of its own; the reader's marks and Not a mistake are tallied and switch nothing", async () => {
+  const fake = fakeDictation({ checkTh: false });
   const { spawned, spawn } = spawner();
   const on = start(fake.api, {
     ensure: async () => FILES,
     spawn,
     natives: async () => null,
-    shipped: async () => new Set(["z-s"]),
     past: {
       list: async () => Array.from({ length: 15 }, (_, k) => ({ ...PAST, id: `${PAST.id}${k}` })),
       read: async () => ({
@@ -136,16 +135,52 @@ test("in the extension: the job scores past pieces on a worker of its own, and t
         body: { id: flag.id, verdict: "right" },
       });
     }
-    expect(fake.documents.get(CUTS)).toMatchObject({
-      checks: { th: { state: "on", cut: 0.76, marked: 15, right: 15 } },
+    expect(tallyOf(parseMarks(fake.documents.get(MARKS)), "th")).toEqual({
+      marked: 15,
+      right: 15,
+      wrong: 0,
     });
 
-    // The next piece dictated is judged with th on from 0.76, beating thresholds.json's off.
+    // Fifteen Right marks switch nothing on: TH's switch is off, so its marks are not drawn.
     void fake.heard.piece?.(threeTrees());
     await until(() => (dictation?.lines.length ?? 0) === 1);
-    expect(JudgeRequest.parse(JSON.parse(dictation?.lines[0] ?? "")).overrides).toEqual({
-      contrasts: { th: { off: false, maybe: 0.76 } },
+    const asked = JudgeRequest.parse(JSON.parse(dictation?.lines[0] ?? ""));
+    const three = {
+      index: 0,
+      check: "th" as const,
+      word: "Three",
+      heard: "tɹiː",
+      expected: "θɹiː",
+      sound: "th → t",
+      how: "",
+      posterior: 0.9,
+      said: "TREE",
+      say: "THREE",
+      fix: "TH said as T.",
+    };
+    const stress = { ...three, index: 1, check: "stress" as const, word: "trees", heard: "x" };
+    dictation?.say({ type: "marks", id: asked.id, marks: [three, stress], scores: [], ms: 5 });
+    await until(() => fake.marks.length === 1);
+    expect(fake.marks[0]?.marks.map((one) => one.label)).toEqual(["trees"]);
+
+    // "Not a mistake" on the stress mark counts as Wrong, and the check stays on.
+    await fake.heard.action?.({
+      sessionId: "s1",
+      dict: "d1",
+      piece: 0,
+      markStart: 6,
+      markEnd: 11,
+      action: "not-a-mistake",
     });
+    const after = (await on.panel?.handle({ path: "flags", query: {}, body: null })) as {
+      checks: { id: string; on: boolean; marked: number; wrong: number }[];
+    };
+    expect(after.checks.find((one) => one.id === "stress")).toMatchObject({
+      on: true,
+      marked: 1,
+      wrong: 1,
+    });
+    expect(after.checks.find((one) => one.id === "th")).toMatchObject({ on: false, marked: 15 });
   } finally {
     on.stop();
   }

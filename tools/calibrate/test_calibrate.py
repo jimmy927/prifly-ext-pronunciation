@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import statistics
 import sys
 import tempfile
 import unittest
@@ -219,8 +220,51 @@ class Stats(unittest.TestCase):
             cuts = json.loads((root / "out" / "thresholds.json").read_text())["contrasts"]
             self.assertEqual(cuts["z-s"]["maybe"], 0.605)
             self.assertFalse(cuts["z-s"]["off"])
-            self.assertTrue(cuts["th"]["off"])
+            self.assertIn("learner precision 0.90 on 30 labelled flags", cuts["z-s"]["why"])
+            # No learner flags at all: still on, the reader's switch decides; never stricter than 0.70 / 0.88.
+            self.assertFalse(cuts["th"]["off"])
+            self.assertLessEqual(cuts["th"]["maybe"], 0.70)
+            self.assertLessEqual(cuts["th"]["sure"], 0.88)
             self.assertIn("| z-s |", (root / "report.md").read_text())
+
+    def test_deviate_of_mirrors_native_ts(self):
+        curve = [(-3.0, -2.3263), (-2.0, -1.6449), (0.0, 0.0)]
+        self.assertAlmostEqual(stats.deviate_of(curve, -2.0), -1.6449)
+        self.assertAlmostEqual(stats.deviate_of(curve, -1.0), -0.82245)
+        # Past the last point the end segment is carried on, as a normal tail.
+        self.assertAlmostEqual(stats.deviate_of(curve, -4.0), -3.0077)
+        self.assertIsNone(stats.curve_of({"n": 50, "p1": -3.0, "p50": 0.0}))
+
+    def test_deviate_cut_offs_from_natives(self):
+        normal = statistics.NormalDist()
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "dump").mkdir()
+            (root / "corpora").mkdir()
+            # 400 native judged words, each with a j whose goodness spreads as 5 + 2z; the any-sound
+            # candidates: 2 words at -1 (about z -3), 2 at -3 (about z -4), the rest at 5.
+            records = []
+            for i in range(400):
+                lpr = 5 + 2 * normal.inv_cdf((i + 1) / 401)
+                said = -1.0 if i < 2 else -3.0 if i < 4 else 5.0
+                records.append({**word(i, "just", "dʒ ʌ s t", []), "phones": [{"phone": "dʒ", "lpr": lpr, "lp": 0.0}],
+                                "anySound": [{"at": 0, "expected": "dʒ", "rival": "j", "lpr": said, "last": False}]})  # fmt: skip
+            (root / "dump" / "librispeech.0.jsonl").write_text("\n".join(json.dumps(r) for r in records) + "\n")
+            stats.main(["--dump", str(root / "dump"), "--corpora", str(root / "corpora"), "--out", str(root / "out"), "--report", str(root / "report.md")])
+            cuts = json.loads((root / "out" / "thresholds.json").read_text())["contrasts"]
+            native = json.loads((root / "out" / "native-stats.json").read_text())
+            curve = stats.curve_of(native["phones"]["dʒ"]["lpr"])
+            # Maybe flags the two at -3 only (2 in 400 = 1 in 200), sure none; never looser than the 0.5th percentile.
+            any_sound = cuts["any-sound"]
+            self.assertFalse(any_sound["off"])
+            self.assertLess(any_sound["maybe"], stats.deviate_of(curve, -1.0))
+            self.assertGreaterEqual(any_sound["maybe"], stats.deviate_of(curve, -3.0))
+            self.assertLessEqual(any_sound["maybe"], stats.Z_P05)
+            self.assertLess(any_sound["sure"], stats.deviate_of(curve, -3.0))
+            # No weak-vowel candidates in this dump: the natives' 0.5th / 0.1th percentiles, said why.
+            self.assertEqual((cuts["weak-vowels"]["maybe"], cuts["weak-vowels"]["sure"]), (stats.Z_P05, stats.Z_P01))
+            self.assertIn("not measured", cuts["weak-vowels"]["why"])
+            self.assertIn("## Any other swapped sound and unreduced vowels", (root / "report.md").read_text())
 
 
 FIXTURE = Path(__file__).resolve().parents[2] / "test" / "fixtures" / "stress-sentence.json"
@@ -282,11 +326,11 @@ class Stress(unittest.TestCase):
         self.assertIn("p99.5", natives["dur+rms+f0"])
         self.assertIn("## Word stress", report)
 
-    def test_stress_is_off_without_learner_stress_scores(self):
+    def test_stress_stays_on_without_learner_stress_scores_and_says_so(self):
         entry, _, report = self.run_stats(learner_stress=False)
-        self.assertTrue(entry["off"])
+        self.assertFalse(entry["off"])
         self.assertIn("no learner stress labels", entry["why"])
-        self.assertIn("Ships: off", report)
+        self.assertIn("Bar: no learner stress labels", report)
 
 
 if __name__ == "__main__":

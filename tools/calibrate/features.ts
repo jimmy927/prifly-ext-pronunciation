@@ -3,11 +3,14 @@
  * the pronunciation the alignment chose, each phone's goodness
  * (`pronounce/gop.ts`), each vowel's stress cues (over the stretch it owns,
  * `ownedSpans`), the dictionary's stress
- * (and which vowel the other accepted pronunciations stress), and every swap the checks look at with its posterior and the conditions
- * `judge.ts` marks it under (`candidatesOf`), so `stats.py` can choose
- * cut-offs that the extension then applies exactly as measured.
+ * (and which vowel the other accepted pronunciations stress), every swap the checks look at with its posterior and the conditions
+ * `judge.ts` marks it under (`candidatesOf`), and the consonants and weak
+ * vowels the natives'-scale checks would mark (`anySoundCandidates`,
+ * `weakVowelCandidates`), so `stats.py` can choose cut-offs that the
+ * extension then applies exactly as measured.
  */
 
+import { anySoundCandidates, type SoundCandidate } from "../../pronounce/any-sound";
 import type { Posteriors } from "../../pronounce/ctc";
 import { type Dictionary, sourceOf, stressOf } from "../../pronounce/dictionary";
 import type { AlignedPhone } from "../../pronounce/force-align";
@@ -24,6 +27,7 @@ import {
 } from "../../pronounce/judge";
 import { isVowel } from "../../pronounce/phones";
 import { acceptedStresses } from "../../pronounce/stress";
+import { type WeakCandidate, weakVowelCandidates } from "../../pronounce/weak-vowels";
 
 /** Numbers kept to 4 decimals: enough for any cut-off, a third the bytes. */
 const round = (x: number) => Math.round(x * 1e4) / 1e4;
@@ -75,6 +79,10 @@ export type WordRecord = {
   phones: PhoneRecord[];
   vowels: VowelRecord[];
   candidates: Candidate[];
+  /** Any other swapped sound (`any-sound.ts`): each consonant lost to another, with its LPR, before the natives' cut-off. */
+  anySound: SoundCandidate[];
+  /** Unreduced vowels (`weak-vowels.ts`): each unstressed schwa lost to a full vowel, with its LPR, before the cut-off. */
+  weakVowels: WeakCandidate[];
 };
 
 /** An utterance that could not be aligned at all: written so a resumed dump skips it. */
@@ -178,5 +186,7 @@ function wordRecord(
     phones: phoneRecords(read, phones),
     vowels: vowelRecords(audio, said, phones, spans, vowelAt, stress),
     candidates: candidatesOf(read, i).map((one) => ({ ...one, posterior: round(one.posterior) })),
+    anySound: anySoundCandidates(read, i).map((one) => ({ ...one, lpr: round(one.lpr) })),
+    weakVowels: weakVowelCandidates(read, i).map((one) => ({ ...one, lpr: round(one.lpr) })),
   };
 }
