@@ -11,6 +11,7 @@ import {
   UNDERLINE_SURE,
 } from "../pronounce/drawn";
 import type { Judged, JudgeWord } from "../pronounce/judge";
+import { SENSITIVITY, SENSITIVITY_OPTIONS } from "../pronounce/sensitivity";
 import {
   type FakeDictation,
   fakeDictation,
@@ -379,6 +380,43 @@ test("a piece with only maybe marks sends nothing at first, and its marks are dr
   ]);
 });
 
+test("Sensitivity draws a mark from its step on, sure one step stricter, on the marks already given too", async () => {
+  const fake = fakeDictation();
+  const { coach } = made(
+    says([
+      // At every step, as the worker gave marks before Sensitivity.
+      { ...THREE_AS_TREE, posterior: 0.9 },
+      // Drawn from 1 in 50, sure from 1 in 10.
+      { ...THREE_AS_TREE, index: 1, word: "trees", posterior: 0.6, steps: { drawn: 1, sure: 2 } },
+    ]),
+    fake,
+  );
+  coach.piece(threeTrees());
+  await coach.settled();
+  const drawn = () => fake.marks.at(-1)?.marks.map((mark) => [mark.label, mark.level]);
+  expect(drawn()).toEqual([["Three", "sure"]]);
+  fake.changeSettings({ [SENSITIVITY]: SENSITIVITY_OPTIONS[1] });
+  expect(drawn()).toEqual([
+    ["Three", "sure"],
+    ["trees", "maybe"],
+  ]);
+  const shown = fake.marks.length;
+  fake.changeSettings({ [SENSITIVITY]: SENSITIVITY_OPTIONS[2] });
+  // Only a level changed: the marks are given again with it.
+  expect(fake.marks).toHaveLength(shown + 1);
+  expect(drawn()).toEqual([
+    ["Three", "sure"],
+    ["trees", "sure"],
+  ]);
+  fake.changeSettings({ [SENSITIVITY]: SENSITIVITY_OPTIONS[2], [UNDERLINE]: UNDERLINE_SURE });
+  expect(drawn()).toEqual([
+    ["Three", "sure"],
+    ["trees", "sure"],
+  ]);
+  fake.changeSettings({ [SENSITIVITY]: "something else" });
+  expect(drawn()).toEqual([["Three", "sure"]]);
+});
+
 test("a change that leaves what is drawn as it was sends nothing", async () => {
   const fake = await markedWith(UNDERLINE_SURE, [0.9]);
   const shown = fake.marks.length;
@@ -396,7 +434,7 @@ test("a prifly without mark levels is given the marks as before, without the new
   expect(fake.marks[0]?.marks).toEqual([old]);
 });
 
-test("the manifest declares the underline setting the coach reads, a switch per check, all on, the voice box settings, and the version 0.3.0", () => {
+test("the manifest declares the underline and sensitivity settings the coach reads, a switch per check, all on, the voice box settings, and the version 0.3.0", () => {
   expect(manifest.version).toBe("0.3.0");
   expect(manifest.settings).toEqual([
     {
@@ -406,6 +444,15 @@ test("the manifest declares the underline setting the coach reads, a switch per 
       type: "select",
       default: UNDERLINE_ALL,
       options: [UNDERLINE_SURE, UNDERLINE_ALL, UNDERLINE_OFF],
+    },
+    {
+      id: SENSITIVITY,
+      label: "Sensitivity",
+      description:
+        "How readily a word is underlined. Each step finds more, and also more words a native speaker says the same way.",
+      type: "select",
+      default: SENSITIVITY_OPTIONS[0],
+      options: [...SENSITIVITY_OPTIONS],
     },
     ...CHECK_IDS.map((id) => ({
       id: SWITCHES[id],

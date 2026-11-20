@@ -26,10 +26,20 @@ judged then). A "Sure mistakes only" picked before this default is read as
 "Sure and not sure" once, on the first start after the update (remembered in
 `api.state`, `pronounce/drawn.ts`), until you pick an Underline yourself. An
 extension cannot write its settings, so the form keeps saying "Sure mistakes
-only" meanwhile: pick another and back to make it yours. Below Underline, one
-switch per check (see "What it marks"): turn off what does not work for you. A
-change applies at once, to the marks already given too, and nothing switches
-a check off by itself.
+only" meanwhile: pick another and back to make it yours.
+
+Sensitivity, below it, says how readily a word is underlined: "Like 1 in 200
+natives" (the default, the cut-offs above), "Like 1 in 50 natives" or "Like 1
+in 10 natives". Each step finds more, and also more words a native speaker
+says the same way: every check's "not sure" moves to where natives get it on 1
+word (or sound) in 50, or 1 in 10, and "sure" stays one step stricter, at the
+step before's "not sure" (`pronounce/sensitivity.ts`; the steps are each
+check's `looser` in `pronounce/data/thresholds.json`, see "What ships now").
+"Check your flags" names the step in use.
+
+Below Sensitivity, one switch per check (see "What it marks"): turn off what
+does not work for you. A change to any of these applies at once, to the marks
+already given too, and nothing switches a check off by itself.
 
 Listen is prifly's own. "Not a mistake" keeps that word with what was heard
 in it, in `api.state`, and the pair is never marked again; it also counts as a
@@ -143,6 +153,23 @@ Any other swapped sound and unreduced vowels are not measured per word yet:
 they mark from the natives' 0.5th (not sure) and 0.1th (sure) percentile of
 each sound until a calibration measures them. The full run is in
 [`tools/calibrate/report.md`](tools/calibrate/report.md).
+
+The looser Sensitivity steps, from the same natives:
+
+| check                               | 1 in 200 (default) | 1 in 50        | 1 in 10         |
+| ----------------------------------- | ------------------ | -------------- | --------------- |
+| the five contrasts (posterior)      | 0.50               | 0.20           | 0.20            |
+| word stress (lead, with / no pitch) | 1.15 / 1.25        | 0.90           | 0.30            |
+| vowels, any other sound, unreduced  | 0.5th percentile   | 2nd percentile | 10th percentile |
+
+Natives get a contrast on at most 0.15% of words even at 0.50, the lowest
+posterior the calibration measured, so 1 in 50 and 1 in 10 are not reached on
+its curve: `stats.py` (`loosened_cut`) carries the curve on below and stops at
+a floor of 0.20, which both steps hit; the next calibration measures the
+natives down to 0.20. Word stress's steps are the natives' lead percentiles 98
+and 90 (`native-stats.json`), rounded up to `stats.py`'s grid.
+`tools/calibrate/rescore.ts` re-scores a dump of your own dictation at every
+step from its numbers, without the model.
 
 | check                   | learner precision                   | native flags per word at 0.70 | ships                       |
 | ----------------------- | ----------------------------------- | ----------------------------- | --------------------------- |

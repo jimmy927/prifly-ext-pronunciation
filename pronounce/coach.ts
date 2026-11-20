@@ -9,9 +9,10 @@
  * piece's content words also go into the accent profile (`profile.ts`), and
  * its stressed vowels are checked against the natives' here (`vowels.ts`).
  *
- * Every check's marks are kept; which are drawn is the reader's settings'
- * (`drawn.ts`): the Underline setting and each check's switch. A setting
- * changed redraws the marks already given.
+ * Every check's marks are kept, judged at every Sensitivity step
+ * (`sensitivity.ts`); which are drawn, and at which level, is the reader's
+ * settings' (`drawn.ts`): Sensitivity, Underline and each check's switch. A
+ * setting changed redraws the marks already given.
  *
  * Dictation never waits on any of it: a handler keeps what it needs and
  * returns, and the judging runs after, one request at a time. While one
@@ -35,6 +36,7 @@ import { wordKey } from "./dictionary";
 import {
   type Drawn,
   drawnBy,
+  drawnMark,
   drawsNothing,
   pickDrawn,
   type Shown,
@@ -55,7 +57,7 @@ import {
 import type { AccentProfile, PieceAt } from "./profile";
 import type { Judgement } from "./scores";
 import { MIN_RATE, PIECE_RATE, type Voice } from "./voice";
-import { vowelMarks } from "./vowels";
+import { steppedVowelMarks } from "./vowels";
 
 /** The id of the mark's own action; the window adds Listen itself. */
 export const NOT_A_MISTAKE = "not-a-mistake";
@@ -183,9 +185,12 @@ export class Coach {
     for (const group of [...this.groups.values()]) {
       const was = pickDrawn(group.shown, before, MAX_MARKS);
       const now = pickDrawn(group.shown, this.drawn, MAX_MARKS);
-      if (was.length !== now.length || was.some((one, at) => one !== now[at])) {
-        this.show(group, true);
-      }
+      const level = (one: Shown, drawn: Drawn) => drawnMark(one, drawn).level;
+      const changed = (one: Shown, at: number) => {
+        const other = now[at];
+        return one !== other || level(one, before) !== level(other, this.drawn);
+      };
+      if (was.length !== now.length || was.some(changed)) this.show(group, true);
     }
   }
 
@@ -238,7 +243,7 @@ export class Coach {
   /** The Vowels check's marks of a judged piece (`vowels.ts`), from its scores, the natives' and the accent profile. */
   private vowelMarksOf(judged: Judgement, spots: readonly Spot[]): Judged[] {
     if (this.profile === null) return [];
-    return vowelMarks(
+    return steppedVowelMarks(
       judged.scores,
       spots.map((spot) => spot.text),
       this.profile.assessed(),
@@ -477,7 +482,7 @@ export class Coach {
         dict,
         piece,
         ...(at === undefined ? {} : { at }),
-        marks: drawn.map((one) => one.mark),
+        marks: drawn.map((one) => drawnMark(one, this.drawn)),
       });
     } catch (caught) {
       if (!(caught instanceof Error)) throw caught;

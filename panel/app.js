@@ -182,6 +182,7 @@ const scoreButton = document.getElementById("score");
 const cancelButton = document.getElementById("cancel");
 const resetButton = document.getElementById("reset");
 const jobLine = document.getElementById("job-line");
+const sensitivityLine = document.getElementById("sensitivity-line");
 const progress = document.getElementById("progress");
 const progressBar = document.getElementById("progress-bar");
 const tabs = {
@@ -302,6 +303,7 @@ function showJob(view) {
   const { state, done, total, line } = view.job;
   jobLine.textContent = line;
   jobLine.className = `job-line${state === "failed" ? " error" : ""}`;
+  sensitivityLine.textContent = view.sensitivity ?? "";
   const running = state === "running" || state === "listing";
   progress.classList.toggle("active", running);
   progressBar.style.width = total > 0 ? `${Math.round((done / total) * 100)}%` : "0%";

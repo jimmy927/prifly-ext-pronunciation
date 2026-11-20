@@ -1,6 +1,12 @@
 import { expect, test } from "bun:test";
 import { Coach, NOT_A_MISTAKE } from "../pronounce/coach";
-import { type NativeStats, valueAt, Z_P05 } from "../pronounce/native";
+import {
+  NATIVE_STATS_PATH,
+  type NativeStats,
+  parseNativeStats,
+  valueAt,
+  Z_P05,
+} from "../pronounce/native";
 import {
   AccentProfile,
   type Assessed,
@@ -11,7 +17,7 @@ import {
   type Profile,
 } from "../pronounce/profile";
 import type { WordScores } from "../pronounce/scores";
-import { vowelMarks } from "../pronounce/vowels";
+import { steppedVowelMarks, vowelMarks } from "../pronounce/vowels";
 import { CURVE, much, NOW, natives, WHERE, word } from "./accent-fixtures";
 import { fakeDictation, THREE_AS_TREE, threeTrees } from "./fake-dictation";
 
@@ -55,6 +61,30 @@ test("a stressed vowel past the natives' 0.5th percentile is a not-sure Vowel ma
   });
   expect(mark?.fix.length ?? 999).toBeLessThan(300);
   expect(mark?.posterior ?? 0).toBeGreaterThan(0.995);
+});
+
+test("the reader's \"we're\" (ɜː at LPR -4.81, ɪ won) would be a Vowel mark at every step were it scored; it is not, as Britfone lacks it (scores.test.ts)", async () => {
+  const shipped = parseNativeStats(await Bun.file(NATIVE_STATS_PATH).json());
+  const were: WordScores = {
+    index: 0,
+    phones: ["w", "ɜː"],
+    stress: 1,
+    vowels: [{ at: 1, phone: "ɜː", lpr: -4.8104, rival: "ɪ" }],
+    contrasts: [],
+  };
+  const [mark] = steppedVowelMarks([were], ["we're"], NONE, shipped);
+  expect(mark).toMatchObject({ check: "vowel-patterns", steps: { drawn: 0, sure: 3 } });
+});
+
+test("a vowel between the natives' 0.5th and 10th percentile is drawn from a looser Sensitivity step", () => {
+  const between = valueAt(curve, -2.3);
+  const [mark] = steppedVowelMarks([much(between)], ["much"], NONE, stats);
+  expect(mark?.steps).toEqual({ drawn: 1, sure: 3 });
+  expect(steppedVowelMarks([much(valueAt(curve, -1.5))], ["much"], NONE, stats)[0]?.steps).toEqual({
+    drawn: 2,
+    sure: 3,
+  });
+  expect(steppedVowelMarks([much(valueAt(curve, -1))], ["much"], NONE, stats)).toEqual([]);
 });
 
 test("no mark short of the cut-off, for an unstressed vowel, a rival that is no vowel, or without natives", () => {

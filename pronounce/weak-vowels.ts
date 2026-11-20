@@ -18,7 +18,7 @@ import { vowelNamed } from "./accent-words";
 import { stressOf, wordKey } from "./dictionary";
 import { phoneScore } from "./gop";
 import { chosenOf, type Judged, type JudgeWord, otherHas, type ReadPiece } from "./judge";
-import { curveFor, deviateOf, type NativeStats, normalShare } from "./native";
+import { curveFor, deviateOf, type NativeCurve, type NativeStats, normalShare } from "./native";
 import { isVowel, samePhone } from "./phones";
 import { respellPair, spellsVowel } from "./respell";
 import { type DeviateCut, deviateLevel } from "./thresholds";
@@ -80,6 +80,21 @@ export function weakVowelMarks(
   return weakVowelFound(read, words, natives, cut).map((one) => one.mark);
 }
 
+/** Of a word's `candidates`, the schwa furthest past the cut-off on the natives' schwa `curve`; null when none is. */
+export function worstWeak(
+  candidates: readonly WeakCandidate[],
+  curve: NativeCurve,
+  cut: DeviateCut,
+): { one: WeakCandidate; deviate: number } | null {
+  let worst: { one: WeakCandidate; deviate: number } | null = null;
+  for (const one of candidates) {
+    const deviate = deviateOf(curve, one.lpr);
+    if (deviate > cut.maybe) continue;
+    if (worst === null || deviate < worst.deviate) worst = { one, deviate };
+  }
+  return worst;
+}
+
 /** `weakVowelMarks`, each with the native deviate of its schwa. */
 export function weakVowelFound(
   read: ReadPiece,
@@ -90,12 +105,7 @@ export function weakVowelFound(
   const curve = curveFor(natives, "vowel", SCHWA);
   if (curve === null || cut.off) return [];
   return words.flatMap((word, index): { mark: Judged; deviate: number }[] => {
-    let worst: { one: WeakCandidate; deviate: number } | null = null;
-    for (const one of weakVowelCandidates(read, index)) {
-      const deviate = deviateOf(curve, one.lpr);
-      if (deviate > cut.maybe) continue;
-      if (worst === null || deviate < worst.deviate) worst = { one, deviate };
-    }
+    const worst = worstWeak(weakVowelCandidates(read, index), curve, cut);
     const chosen = chosenOf(read, index);
     if (worst === null || chosen === null) return [];
     const { one, deviate } = worst;

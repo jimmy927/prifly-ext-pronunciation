@@ -179,17 +179,20 @@ test("under the shipped files the worker marks with every check it makes: the co
         say: "JUST",
         fix: "Swapped sound. The J in 'just' came out as a Y. Start with the tongue touching, as for D, then let it go with your voice on.",
       },
+      // Only from the Sensitivity step 1 in 50 on: the default draws the other three.
+      { index: 2, check: "stress", level: "maybe", steps: { drawn: 1, sure: 2 } },
       {
         index: 2,
         check: "weak-vowels",
         level: "sure",
+        steps: { drawn: 0, sure: 0 },
         said: "a-BOWT",
         say: "u-BOWT",
         fix: "Unreduced vowel. The weak vowel in 'about' came out full, like the A in 'cap'. Say it short and weak: uh.",
       },
     ],
   });
-  expect(marks).toHaveLength(3);
+  expect(marks).toHaveLength(4);
 });
 
 test("a scan flags every check, the ones thresholds.json turns off too, with the scores for the vowels", async () => {

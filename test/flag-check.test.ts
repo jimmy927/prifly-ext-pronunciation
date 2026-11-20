@@ -14,6 +14,7 @@ import type { PastPiece } from "../pronounce/past-pieces";
 import { MARKS, Personal } from "../pronounce/personal";
 import { AccentProfile } from "../pronounce/profile";
 import type { ScanAnswer, ScanWorker } from "../pronounce/scan-worker";
+import type { Sensitivity } from "../pronounce/sensitivity";
 import type { Wav } from "../pronounce/wav";
 import { much, natives } from "./accent-fixtures";
 import { fakeState } from "./fake-api";
@@ -86,6 +87,7 @@ function setup(
     worker?: (signal: AbortSignal) => Promise<ScanWorker>;
     read?: FlagCheckDeps["read"];
     box?: boolean;
+    sensitivity?: () => Sensitivity;
   } = {},
 ) {
   const { state, documents } = fakeState();
@@ -104,6 +106,7 @@ function setup(
     natives: () => natives(),
     // Every switch on but TH's.
     switchedOn: () => new Set<CheckId>(CHECK_IDS.filter((id) => id !== "th")),
+    ...(options.sensitivity === undefined ? {} : { sensitivity: options.sensitivity }),
     voice: {
       yours: async (clip) => {
         played.push({ which: "yours", rate: clip.rate, length: clip.samples.length });
@@ -177,6 +180,17 @@ test("before any job: Score is on, Cancel and Reset are off, and every check is 
     marked: 0,
     line: "Not marked yet. Off: switch on “TH said as T, D, S or F” in Settings → Extensions → Pronunciation to underline it again.",
   });
+});
+
+test("the page names the Sensitivity dictation is underlined at now, and where to change it", async () => {
+  expect((await setup().ask("flags")).sensitivity).toBe(
+    "Dictation is underlined at “Like 1 in 200 natives”: Sensitivity in Settings → Extensions → Pronunciation.",
+  );
+  let step: Sensitivity = 2;
+  const { ask } = setup({ sensitivity: () => step });
+  expect((await ask("flags")).sensitivity).toContain("“Like 1 in 10 natives”");
+  step = 1;
+  expect((await ask("flags")).sensitivity).toContain("“Like 1 in 50 natives”");
 });
 
 test("each check's tally counts Wrong here and Not a mistake in the session alike, beside the switch that turns it off", async () => {

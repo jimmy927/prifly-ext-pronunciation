@@ -36,6 +36,8 @@ const Z_OF: ReadonlyArray<readonly [string, number]> = [
 
 /** z of the natives' 10th percentile: a feature whose median sits below it is further off than 9 in 10 native ones. */
 export const Z_P10 = -1.2816;
+/** z of the natives' 2nd percentile: 1 native sound in 50 (the Sensitivity step "Like 1 in 50 natives"). */
+export const Z_P2 = -2.0537;
 /** z of the natives' 0.5th percentile: at most 1 native word in 200 sits below it. */
 export const Z_P05 = -2.5758;
 /** z of the natives' 0.1th percentile: 1 native sound in 1000. */

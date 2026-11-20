@@ -1,5 +1,6 @@
 /**
- * Which of the marks given are drawn (`coach.ts`): the Underline setting says which levels (sure
+ * Which of the marks given are drawn (`coach.ts`): the Sensitivity setting says from which step
+ * a mark is drawn and at which level (`sensitivity.ts`), the Underline setting which levels (sure
  * ones, or not sure ones too, or none), and each check's switch whether its marks are drawn at
  * all (`checks.ts`). Of a word marked by several checks, the first drawn in `CHECK_IDS` order is
  * its mark (`pickDrawn`).
@@ -15,6 +16,14 @@ import type { DictationMark, ExtensionStateApi, SettingValues } from "@prifly/ex
 import { z } from "zod";
 import { type CheckId, switchedOn } from "./checks";
 import { type Judged, levelOf } from "./judge";
+import {
+  drawnAt,
+  levelAtStep,
+  type Sensitivity,
+  type Steps,
+  sensitivityOf,
+  stepsOf,
+} from "./sensitivity";
 
 /** `markDictation`'s limit for a mark's line, and `DictationMark`'s for `said` and `say`. */
 const MAX_DETAIL = 300;
@@ -34,16 +43,20 @@ type SwitchDoc = z.infer<typeof SwitchDoc>;
 
 export type Level = "sure" | "maybe";
 
-/** What decides which marks are drawn: the levels the Underline setting draws, and the checks switched on. */
-export type Drawn = { levels: readonly Level[]; checks: ReadonlySet<CheckId> };
+/** What decides which marks are drawn: the levels the Underline setting draws, the checks switched on, and the Sensitivity step (`sensitivity.ts`). */
+export type Drawn = {
+  levels: readonly Level[];
+  checks: ReadonlySet<CheckId>;
+  sensitivity: Sensitivity;
+};
 
-/** A mark as given, with the word and what was heard in it, for "Not a mistake", its check and how sure it is: whether it is drawn is the settings'. `score` is the mark's posterior; `from` and `to` are the word's samples in the piece's audio. */
+/** A mark as given, with the word and what was heard in it, for "Not a mistake", its check and from which Sensitivity step it is drawn and drawn sure: whether it is drawn, and at which level, is the settings'. `score` is the mark's posterior; `from` and `to` are the word's samples in the piece's audio. */
 export type Shown = {
   mark: DictationMark;
   word: string;
   heard: string;
   check: CheckId;
-  level: Level;
+  steps: Steps;
   score: number;
   from: number;
   to: number;
@@ -82,7 +95,14 @@ export function shownMark(
       : {}),
   };
   const { word, heard, check, posterior: score } = one;
-  return { mark, word, heard, check, level, score, from: spot.from, to: spot.to };
+  const steps = stepsOf(one.steps, level);
+  return { mark, word, heard, check, steps, score, from: spot.from, to: spot.to };
+}
+
+/** `one`'s mark as `drawn` draws it: its level the one at the Sensitivity step now, where prifly takes levels. */
+export function drawnMark(one: Pick<Shown, "mark" | "steps">, drawn: Drawn): DictationMark {
+  if (one.mark.level === undefined) return one.mark;
+  return { ...one.mark, level: levelAtStep(one.steps, drawn.sensitivity) };
 }
 
 /** The levels each option of the `underline` setting draws; an unknown value is the default, both. */
@@ -97,7 +117,7 @@ export function drawnBy(values: SettingValues | undefined, switched: boolean): D
   const levels = allowedLevels(
     switched && underline === UNDERLINE_SURE ? UNDERLINE_ALL : underline,
   );
-  return { levels, checks: switchedOn(values) };
+  return { levels, checks: switchedOn(values), sensitivity: sensitivityOf(values) };
 }
 
 /** Whether `drawn` draws nothing at all: Underline is Off, or every check is switched off. */
@@ -107,9 +127,10 @@ export function drawsNothing(drawn: Drawn): boolean {
 
 /**
  * The marks of `shown` that `drawn` draws: of each word's (by where it starts), in their order,
- * the first of a level Underline draws whose check is switched on; at most `max`.
+ * the first the Sensitivity step draws, at a level Underline draws there, whose check is
+ * switched on; at most `max`.
  */
-export function pickDrawn<T extends { mark: { start: number }; level: Level; check: CheckId }>(
+export function pickDrawn<T extends { mark: { start: number }; steps: Steps; check: CheckId }>(
   shown: readonly T[],
   drawn: Drawn,
   max: number,
@@ -117,7 +138,8 @@ export function pickDrawn<T extends { mark: { start: number }; level: Level; che
   const taken = new Set<number>();
   const picked: T[] = [];
   for (const one of shown) {
-    if (taken.has(one.mark.start) || !drawn.levels.includes(one.level)) continue;
+    if (taken.has(one.mark.start) || !drawnAt(one.steps, drawn.sensitivity)) continue;
+    if (!drawn.levels.includes(levelAtStep(one.steps, drawn.sensitivity))) continue;
     if (!drawn.checks.has(one.check)) continue;
     taken.add(one.mark.start);
     picked.push(one);

@@ -72,8 +72,14 @@ test("the shipped file has every contrast on at the natives' cut-offs, never str
     expect(cut.maybe).toBeLessThanOrEqual(0.7);
     expect(cut.sure).toBeLessThanOrEqual(0.88);
   }
-  expect(cutOf(shipped, "z-s")).toEqual({ maybe: 0.5, sure: 0.5, off: false });
-  expect(cutOf(shipped, "final-devoicing")).toEqual({ maybe: 0.5, sure: 0.725, off: false });
+  // The looser Sensitivity steps sit at the 0.20 floor: natives never reach 1 in 50 on the measured curve.
+  expect(cutOf(shipped, "z-s")).toEqual({ maybe: 0.5, sure: 0.5, off: false, looser: [0.2, 0.2] });
+  expect(cutOf(shipped, "final-devoicing")).toEqual({
+    maybe: 0.5,
+    sure: 0.725,
+    off: false,
+    looser: [0.2, 0.2],
+  });
   const heard = (posterior: number, id: Candidate["id"] = "z-s"): Candidate => ({
     at: 1,
     expected: "z",

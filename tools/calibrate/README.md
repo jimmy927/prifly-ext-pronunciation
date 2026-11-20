@@ -37,6 +37,10 @@ The steps (`run.py` runs all three, each resumable):
    `WORK/corpora/speechocean762/.done` and run the fetch step again (it rereads the kept
    archive and keeps the wavs already converted), then the stats step; the dump need not run again, though a new dump also writes
    `stressAccepts`, without which a lead to another accepted stress counts against natives.
+   Each check also gets `looser`: its `maybe` for the Sensitivity setting's steps, where
+   natives get 1 flag per 50 and per 10 judged words (`LOOSER_RATES`); a contrast whose
+   natives stay under that rate down to a posterior of 0.20 stops at that floor
+   (`loosened_cut`, which says so in `why`).
 
 ## A fresh Vast.ai box
 
@@ -103,6 +107,8 @@ About an hour all told; the box can go once the three files are copied back.
   directly with `--fa-rate`, `--min-precision`, `--min-flags`.
 - A quick look at the dump: `bun tools/calibrate/dump.ts --wavs DIR --transcript utts.tsv
   --out /tmp/x.jsonl --limit 5 --data /workspace/calibrate/models`.
+- What a dump's words would be underlined with at each Sensitivity step, from its numbers
+  alone (no model): `bun tools/calibrate/rescore.ts --dump /tmp/x.jsonl`.
 - `--provider cuda` (dump.ts and run.py) asks onnxruntime for its CUDA provider, which needs
   `bun node_modules/onnxruntime-node/script/install.js --onnxruntime-node-install=cuda12` and
   CUDA 12 on the box. It is untested, the uint8 model's integer kernels may fall back to the

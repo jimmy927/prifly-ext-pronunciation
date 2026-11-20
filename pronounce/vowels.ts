@@ -6,7 +6,8 @@
  *
  * - its stressed vowel (the only one, in a word of one; never a weak "uh", `weak-vowels.ts` has
  *   those), gliding vowels included, sits at or past the natives' 0.5th percentile (`Z_P05`): at
- *   most 1 native word in 200 would be underlined;
+ *   most 1 native word in 200 would be underlined; the Sensitivity setting loosens it to their
+ *   2nd and 10th (`VOWEL_CUTS`, `sensitivity.ts`);
  * - the sound the model liked best instead is a vowel of another kind that the card can name
  *   ("came out like the A in 'cap'").
  *
@@ -20,10 +21,11 @@ import { patternCard, soundOf, vowelCard, vowelKey } from "./accent-words";
 import { confirmedPatterns, patternOf } from "./confirmed";
 import { wordKey } from "./dictionary";
 import type { Judged } from "./judge";
-import { deviateOf, type NativeStats, normalShare, valueAt, Z_P05 } from "./native";
+import { deviateOf, type NativeStats, normalShare, valueAt, Z_P2, Z_P05, Z_P10 } from "./native";
 import { type Assessed, curveOfKey } from "./profile";
 import { respellPair } from "./respell";
 import type { VowelScore, WordScores } from "./scores";
+import { type Sensitivity, withSteps } from "./sensitivity";
 
 /** `markDictation`'s limits for a card's line and a respelling. */
 const MAX_DETAIL = 300;
@@ -114,4 +116,21 @@ export function vowelMarks(
     const mark = found === null || text === undefined ? null : markOf(word, text, found);
     return mark === null ? [] : [mark];
   });
+}
+
+/** The cut-off at each Sensitivity step (`sensitivity.ts`): the natives' 0.5th, 2nd and 10th percentile. */
+export const VOWEL_CUTS: Readonly<Record<Sensitivity, number>> = { 0: Z_P05, 1: Z_P2, 2: Z_P10 };
+
+/**
+ * `vowelMarks` at every Sensitivity step, each mark with the first step that draws it
+ * (`withSteps`); a mark is sure, from the step that draws it, only for a confirmed pattern.
+ */
+export function steppedVowelMarks(
+  scores: readonly WordScores[],
+  texts: readonly string[],
+  assessed: readonly Assessed[],
+  stats: NativeStats | null,
+): Judged[] {
+  const at = (step: Sensitivity) => vowelMarks(scores, texts, assessed, stats, VOWEL_CUTS[step]);
+  return withSteps([at(0), at(1), at(2)]);
 }

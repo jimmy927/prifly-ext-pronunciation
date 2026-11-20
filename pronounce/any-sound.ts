@@ -115,8 +115,17 @@ function worstOf(
   natives: NativeStats,
   cut: DeviateCut,
 ): { one: SoundCandidate; deviate: number } | null {
+  return worstSound(anySoundCandidates(read, index), natives, cut);
+}
+
+/** Of a word's `candidates`, the consonant furthest past the natives' cut-off for it; null when none is. */
+export function worstSound(
+  candidates: readonly SoundCandidate[],
+  natives: NativeStats,
+  cut: DeviateCut,
+): { one: SoundCandidate; deviate: number } | null {
   let worst: { one: SoundCandidate; deviate: number } | null = null;
-  for (const one of anySoundCandidates(read, index)) {
+  for (const one of candidates) {
     const curve = curveFor(natives, "phone", one.expected);
     const deviate = curve === null ? 0 : deviateOf(curve, one.lpr);
     if (curve === null || deviate > cut.maybe) continue;

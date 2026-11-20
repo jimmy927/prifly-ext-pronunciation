@@ -27,6 +27,7 @@ import type { OnMarkAction } from "./play-shim";
 import { AccentProfile } from "./profile";
 import { PronounceRunner, type RunnerDeps } from "./runner";
 import { startScanWorker } from "./scan-worker";
+import { sensitivityOf } from "./sensitivity";
 import { statusLine } from "./status";
 import { readReference, Voice } from "./voice";
 import { spawnPronounce } from "./worker-pipe";
@@ -99,6 +100,7 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
     worker: (signal) => startScanWorker(deps, signal),
     natives: () => natives,
     switchedOn: () => switchedOn(api.settings),
+    sensitivity: () => sensitivityOf(api.settings),
     voice: deps.voice ?? null,
     sayRight,
     ...(deps.now === undefined ? {} : { now: deps.now }),

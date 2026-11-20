@@ -333,5 +333,46 @@ class Stress(unittest.TestCase):
         self.assertIn("Bar: no learner stress labels", report)
 
 
+class Sensitivity(unittest.TestCase):
+    def test_a_rate_on_the_curve_is_measured(self):
+        curve = [(0.2, 0.15), (0.3, 0.05), (0.4, 0.015), (0.5, 0.004)]
+        self.assertEqual(stats.loosened_cut(curve, 1 / 50, 0.5), (0.4, "measured"))
+        self.assertEqual(stats.loosened_cut(curve, 1 / 10, 0.4), (0.3, "measured"))
+        # Never looser than the step before.
+        self.assertEqual(stats.loosened_cut(curve, 1 / 10, 0.25), (0.25, "measured"))
+
+    def test_a_rate_under_the_whole_curve_is_extrapolated_down_to_the_floor(self):
+        # Ten times fewer flags every 0.1: 1 in 50 at about 0.40, below the curve's 0.5.
+        curve = [(0.5, 0.002), (0.6, 0.0002), (0.7, 0.00002)]
+        cut, how = stats.loosened_cut(curve, 1 / 50, 0.5)
+        self.assertEqual(how, "extrapolated")
+        self.assertAlmostEqual(cut, 0.4, places=3)
+        # Flat, or reaching it only below the floor: the floor.
+        self.assertEqual(stats.loosened_cut([(0.5, 0.0015), (0.6, 0.0013)], 1 / 50, 0.5), (0.2, "floor"))
+        self.assertEqual(stats.loosened_cut([(0.5, 0.0), (0.6, 0.0)], 1 / 10, 0.5), (0.2, "floor"))
+
+    def test_natives_over_the_rate_everywhere_keep_the_step_before(self):
+        self.assertEqual(stats.loosened_cut([(0.5, 0.3), (0.9, 0.2)], 1 / 10, 0.5), (0.5, "none"))
+
+    def test_thresholds_json_gets_each_check_its_looser_steps(self):
+        with tempfile.TemporaryDirectory() as folder:
+            root = Path(folder)
+            (root / "dump").mkdir()
+            (root / "corpora").mkdir()
+            # 100 native judged words, 10 with a th → t heard at 0.3 and 1 more at 0.6.
+            native = [word(i, "thin", "θ ɪ n", [candidate(0, "θ", "t", "th", 0.3 if i < 10 else 0.6)] if i < 11 else []) for i in range(100)]
+            (root / "dump" / "librispeech.0.jsonl").write_text("\n".join(json.dumps(r) for r in native) + "\n")
+            stats.main(["--dump", str(root / "dump"), "--corpora", str(root / "corpora"), "--out", str(root / "out"), "--report", str(root / "report.md")])
+            cuts = json.loads((root / "out" / "thresholds.json").read_text())["contrasts"]
+            # 1 in 50 is reached above 0.3 (only the 0.6 one: 1 in 100); 1 in 10 at 0.3 (11 in 100 is over it).
+            self.assertEqual(cuts["th"]["looser"]["1/50"], 0.305)
+            self.assertEqual(cuts["th"]["looser"]["1/10"], 0.305)
+            # No th flag of natives at all elsewhere: the floor, said so.
+            self.assertEqual(cuts["w-v"]["looser"], {"1/50": 0.2, "1/10": 0.2})
+            self.assertIn("1/50 floor", cuts["w-v"]["why"])
+            self.assertEqual(cuts["any-sound"]["looser"], {"1/50": stats.Z_P2, "1/10": stats.Z_P10})
+            self.assertIn("| th | ", (root / "report.md").read_text())
+
+
 if __name__ == "__main__":
     unittest.main()

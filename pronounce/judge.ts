@@ -34,6 +34,7 @@ import {
 } from "./force-align";
 import { samePhone, splitHeard } from "./phones";
 import { respellPair } from "./respell";
+import type { Steps } from "./sensitivity";
 import {
   cutOf,
   levelAt,
@@ -73,6 +74,8 @@ export type Judged = {
   how: string;
   posterior: number;
   level?: "sure" | "maybe" | undefined;
+  /** From which Sensitivity step it is drawn, and drawn sure (`sensitivity.ts`); left out, at every step at `level`. */
+  steps?: Steps | undefined;
   said: string;
   say: string;
   fix: string;
@@ -348,6 +351,21 @@ function markOf(
   };
 }
 
+/** Of a word's `candidates`, the surest that `thresholds` mark, one per check. */
+export function surestByCheck(
+  candidates: readonly Candidate[],
+  thresholds: Thresholds,
+): Map<CheckId, Candidate> {
+  const surest = new Map<CheckId, Candidate>();
+  for (const one of candidates) {
+    if (!marks(one, thresholds)) continue;
+    const check = checkOfSwap(one.id, one.expected);
+    const known = surest.get(check);
+    if (known === undefined || one.posterior > known.posterior) surest.set(check, one);
+  }
+  return surest;
+}
+
 /** One word's marks, at most one per check (the surest swap of each), in `CHECK_IDS` order; none when it was said as written, or is not judged. */
 function judgeWord(
   read: ReadPiece,
@@ -356,13 +374,7 @@ function judgeWord(
   thresholds: Thresholds,
 ): Judged[] {
   if (read.entries[index]?.judged !== true) return [];
-  const surest = new Map<CheckId, Candidate>();
-  for (const one of candidatesOf(read, index)) {
-    if (!marks(one, thresholds)) continue;
-    const check = checkOfSwap(one.id, one.expected);
-    const known = surest.get(check);
-    if (known === undefined || one.posterior > known.posterior) surest.set(check, one);
-  }
+  const surest = surestByCheck(candidatesOf(read, index), thresholds);
   return CHECK_IDS.flatMap((check): Judged[] => {
     const one = surest.get(check);
     const mark = one === undefined ? null : markOf(read, index, word, one, thresholds);

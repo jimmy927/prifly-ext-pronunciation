@@ -19,10 +19,18 @@
     {
       "id": "underline",
       "label": "Underline",
-      "description": "Which marks are drawn. A mark is sure when native speakers get it on at most 1 word in 1000, otherwise not sure.",
+      "description": "Which marks are drawn. A mark is sure when native speakers get it on at most 1 word in 1000 (at a looser Sensitivity, as rarely as the step before underlines), otherwise not sure.",
       "type": "select",
       "default": "Sure and not sure",
       "options": ["Sure mistakes only", "Sure and not sure", "Off"]
+    },
+    {
+      "id": "sensitivity",
+      "label": "Sensitivity",
+      "description": "How readily a word is underlined. Each step finds more, and also more words a native speaker says the same way.",
+      "type": "select",
+      "default": "Like 1 in 200 natives",
+      "options": ["Like 1 in 200 natives", "Like 1 in 50 natives", "Like 1 in 10 natives"]
     },
     {
       "id": "checkZs",

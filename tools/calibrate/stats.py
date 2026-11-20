@@ -11,7 +11,10 @@ speechocean762, l2arctic, with CORPORA/<corpus>/labels.jsonl from fetch.py) and 
                          read words, `decide_stress`), and for any other swapped sound and
                          unreduced vowels ("any-sound", "weak-vowels": the native deviate a
                          word's worst sound must reach, never looser than the natives' 0.5th
-                         percentile, `decide_deviate`). Every check is written "off": false:
+                         percentile, `decide_deviate`). Each also gets "looser": its maybe for
+                         the Sensitivity setting's steps, natives at 1 per 50 and 1 per 10
+                         (`LOOSER_RATES`; a contrast never below a posterior of 0.2,
+                         `loosened_cut`). Every check is written "off": false:
                          whether one is drawn is the reader's switch in Settings; how often
                          learners' flags are right (the 80% bar) is said in "why" and the report
   OUT/native-stats.json  per phone and per vowel the natives' LPR percentiles, per vowel
@@ -50,6 +53,14 @@ TODAY = 0.70
 # The cut-offs the extension had before any calibration (pronounce/thresholds.ts): never stricter.
 DEFAULT_MAYBE, DEFAULT_SURE = 0.70, 0.88
 
+# The Sensitivity setting's looser steps (pronounce/sensitivity.ts): each check's "maybe" where natives get a flag
+# on 1 judged word in 50, and 1 in 10 (thresholds.json's "looser"); "sure" stays one step stricter, the step before's.
+LOOSER_RATES = {"1/50": 1 / 50, "1/10": 1 / 10}
+# A contrast is never marked below this posterior, whatever the natives' rate: the heard phone was barely in the running.
+POSTERIOR_FLOOR = 0.2
+# The posterior cut-offs the looser steps try: from the floor up, 0.005 apart.
+LOOSE_GRID = [round(POSTERIOR_FLOOR + 0.005 * step, 3) for step in range(160)]
+
 # Any other swapped sound and unreduced vowels (pronounce/any-sound.ts, weak-vowels.ts): a word is
 # flagged when its worst candidate's native deviate (pronounce/native.ts) is at or below the cut-off.
 DEVIATE_CHECKS = {"any-sound": "anySound", "weak-vowels": "weakVowels"}
@@ -59,6 +70,11 @@ MIN_NATIVE = 100
 Z_P05, Z_P01 = -2.5758, -3.0902
 # The deviate cut-offs tried: from the natives' 0.5th percentile (never looser) down, 0.05 apart.
 DEVIATE_GRID = [round(Z_P05 - 0.05 * step, 4) for step in range(120)]
+# The Sensitivity steps' (LOOSER_RATES): their natives' 2nd and 10th percentile until a dump measures the rate per
+# word, then the loosest deviate from the 10th percentile down at which natives stay under the step's rate.
+Z_P2, Z_P10 = -2.0537, -1.2816
+DEVIATE_LOOSER = {"1/50": Z_P2, "1/10": Z_P10}
+DEVIATE_LOOSE_GRID = [round(Z_P10 - 0.05 * step, 4) for step in range(26)]
 
 # Word stress, as pronounce/stress.ts reads it (test/fixtures/stress-sentence.json holds both to the same numbers).
 STRESS = "stress"
@@ -351,6 +367,41 @@ def lowest_cut(tally: Tally, check: str, rate: float) -> float | None:
     return next((cut for cut in GRID if native_rate(tally, check, cut) <= rate), None)
 
 
+def loosened_cut(curve: list[tuple[float, float]], rate: float, stricter: float, floor: float = POSTERIOR_FLOOR) -> tuple[float, str]:
+    """The lowest posterior cut-off at which natives get at most `rate` flags per judged word, never stricter than
+    `stricter` (the step before's) nor below `floor`, and how it was found: "measured", "extrapolated", "floor", or
+    "none" (natives pass `rate` all along the curve, so the step stays at `stricter`).
+
+    `curve` holds (cut-off, native rate) points. Where the natives' rate is under `rate` already at the curve's
+    lowest cut-off, the rate cannot be reached on it: the curve is carried on below, straight in log rate through
+    its lowest point and the next one whose rate is lower (both above 0), down to the cut-off where it would
+    reach `rate`; where the curve does not fall that way, or would reach it only below the floor, the floor."""
+    points = sorted(curve)
+    low_cut, low_rate = points[0]
+    if low_rate > rate:
+        found = next((cut for cut, r in points if r <= rate), None)
+        return (stricter, "none") if found is None else (min(found, stricter), "measured")
+    lower = next(((cut, r) for cut, r in points[1:] if 0 < r < low_rate), None)
+    if low_rate <= 0 or lower is None:
+        return min(floor, stricter), "floor"
+    slope = (math.log(lower[1]) - math.log(low_rate)) / (lower[0] - low_cut)
+    cut = low_cut + (math.log(rate) - math.log(low_rate)) / slope
+    if cut <= floor:
+        return min(floor, stricter), "floor"
+    return min(round(cut, 3), stricter), "extrapolated"
+
+
+def looser_contrast(curve: list[tuple[float, float]], maybe: float) -> tuple[dict, str]:
+    """A contrast's "looser" from the natives' `curve`, and what to say of it where a step was not measured."""
+    looser, said, stricter = {}, [], maybe
+    for step, rate in LOOSER_RATES.items():
+        cut, how = loosened_cut(curve, rate, stricter)
+        looser[step] = stricter = cut
+        if how != "measured":
+            said.append(f"{step} {how} ({cut:.3f})")
+    return looser, ("" if not said else "looser steps not reached on the natives' curve: " + ", ".join(said))
+
+
 def learner_numbers(rows: list[tuple], cut: float | None, corpus: str | None = None) -> dict:
     rows = [row for row in rows if corpus is None or row[0] == corpus]
     if cut is None:
@@ -387,11 +438,13 @@ def decide(tally: Tally, args) -> dict:
         else:
             bar = ""
         precision = "–" if learners["precision"] is None else f"{learners['precision']:.2f}"
+        curve = [(cut, native_rate(tally, check, cut)) for cut in LOOSE_GRID]
+        looser, unreached = looser_contrast(curve, maybe)
         why = (
             f"natives: {native_rate(tally, check, maybe):.2%} of words at {maybe:.3f}; "
             f"learner precision {precision} on {learners['matched']} labelled flags"
-        )
-        out[check] = {"maybe": maybe, "sure": sure, "learners": learners, "off": False, "bar": bar, "why": why}
+        ) + (f"; {unreached}" if unreached else "")
+        out[check] = {"maybe": maybe, "sure": sure, "looser": looser, "learners": learners, "off": False, "bar": bar, "why": why}
     return out
 
 
@@ -431,8 +484,8 @@ class NativeWorst:
         """Native judged words flagged at deviate `cut`, per word."""
         return math.inf if self.n == 0 else bisect.bisect_right(self.worst, cut) / self.n
 
-    def loosest(self, rate: float) -> float | None:
-        return next((cut for cut in DEVIATE_GRID if self.rate(cut) <= rate), None)
+    def loosest(self, rate: float, grid: list[float] = DEVIATE_GRID) -> float | None:
+        return next((cut for cut in grid if self.rate(cut) <= rate), None)
 
 
 def decide_deviate(tally: Tally, args) -> dict:
@@ -451,7 +504,11 @@ def decide_deviate(tally: Tally, args) -> dict:
         maybe = Z_P05 if maybe is None else maybe
         sure = min(maybe, Z_P01 if sure is None else sure)
         at_p05 = natives.rate(Z_P05) if natives.n else None
-        out[check] = {"n": natives.n, "maybe": maybe, "sure": sure, "rateAtP05": at_p05, "off": False, "why": why}
+        looser, stricter = {}, maybe
+        for step, rate in LOOSER_RATES.items():
+            found = natives.loosest(rate, DEVIATE_LOOSE_GRID) if natives.n else DEVIATE_LOOSER[step]
+            looser[step] = stricter = max(stricter, stricter if found is None else found)
+        out[check] = {"n": natives.n, "maybe": maybe, "sure": sure, "looser": looser, "rateAtP05": at_p05, "off": False, "why": why}
     return out
 
 
@@ -504,14 +561,20 @@ def decide_stress(tally: Tally, args) -> dict:
     for combo in COMBOS:
         natives = NativeLeads(tally.stress_native, combo)
         maybe = sure = None
+        looser: dict = {}
         if natives.n >= args.min_stress_words:
             maybe, sure = natives.lowest(args.fa_rate), natives.lowest(args.sure_fa_rate)
             if maybe is not None and sure is not None:
                 sure = max(sure, maybe)
+                stricter = maybe
+                for step, rate in LOOSER_RATES.items():
+                    found = natives.lowest(rate)
+                    looser[step] = stricter = stricter if found is None else min(found, stricter)
         combos[combo] = {
             "n": natives.n,
             "maybe": maybe,
             "sure": sure,
+            "looser": looser,
             "rateAtMaybe": None if maybe is None else natives.rate(maybe),
             "rateAtZero": natives.rate(LEAD_GRID[0]) if natives.n else None,
         }
@@ -540,12 +603,14 @@ def thresholds_json(decided: dict, source: str, stress: dict | None = None, devi
             entry["maybe"] = d["maybe"]
         if d["sure"] is not None:
             entry["sure"] = d["sure"]
+        if d.get("looser"):
+            entry["looser"] = d["looser"]
         if d["why"]:
             entry["why"] = d["why"]
         contrasts[check] = entry
     if stress is not None:
         cuts = {
-            combo: {"maybe": c["maybe"], "sure": c["sure"]}
+            combo: {"maybe": c["maybe"], "sure": c["sure"], **({"looser": c["looser"]} if c.get("looser") else {})}
             for combo, c in stress["combos"].items()
             if c["maybe"] is not None and c["sure"] is not None
         }
@@ -612,13 +677,19 @@ def deviate_report(deviate: dict, args) -> list[str]:
         "neighbour), or its unstressed schwa that lost to a full vowel, placed among the natives' goodness for "
         "that phone (native-stats.json) as a normal deviate. Natives set the cut-off: the loosest deviate, from "
         f"their 0.5th percentile ({Z_P05}) down, at which at most {args.fa_rate:.4f} of their judged words "
-        f"would be marked (`maybe`), {args.sure_fa_rate:.4f} (`sure`). No learner labels are read for these.",
+        f"would be marked (`maybe`), {args.sure_fa_rate:.4f} (`sure`). No learner labels are read for these. "
+        "The Sensitivity steps' maybe: the loosest deviate from their 10th percentile down at which at most 1 in "
+        "50 and 1 in 10 of their judged words would be marked; without measured words, their 2nd and 10th percentile.",
         "",
-        "| check | native judged words | native rate at the 0.5th percentile | maybe | sure | |",
-        "|---|---|---|---|---|---|",
+        "| check | native judged words | native rate at the 0.5th percentile | maybe | sure | 1 in 50 | 1 in 10 | |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for check, d in deviate.items():
-        lines.append(f"| {check} | {d['n']} | {fmt(d['rateAtP05'], 4)} | {fmt(d['maybe'])} | {fmt(d['sure'])} | {d['why']} |")
+        looser = d.get("looser", {})
+        lines.append(
+            f"| {check} | {d['n']} | {fmt(d['rateAtP05'], 4)} | {fmt(d['maybe'])} | {fmt(d['sure'])} | "
+            f"{fmt(looser.get('1/50'))} | {fmt(looser.get('1/10'))} | {d['why']} |"
+        )
     return lines
 
 
@@ -672,10 +743,21 @@ def report(tally: Tally, decided: dict, stress: dict, args, deviate: dict | None
                 f"{fmt(n['strict'])} | {fmt(n['recall'])} |"
             )
     lines += ["", "Native flags per judged word by cut-off:", ""]
-    cuts = [0.5, 0.6, 0.7, 0.8, 0.88, 0.9, 0.95, 0.99]
+    cuts = [0.2, 0.3, 0.4, 0.5, 0.6, 0.7, 0.8, 0.88, 0.9, 0.95, 0.99]
     lines += ["| check | " + " | ".join(str(c) for c in cuts) + " |", "|---" * (len(cuts) + 1) + "|"]
     for check in CHECKS:
         lines.append(f"| {check} | " + " | ".join(fmt(native_rate(tally, check, c), 4) for c in cuts) + " |")
+    lines += [
+        "",
+        "Sensitivity steps (pronounce/sensitivity.ts): each contrast's maybe where natives get a flag on 1 judged "
+        f"word in 200 (the maybe above), 50 and 10, never below {POSTERIOR_FLOOR}; sure is one step stricter.",
+        "",
+        "| check | 1 in 200 | 1 in 50 | 1 in 10 | |",
+        "|---|---|---|---|---|",
+    ]
+    for check, d in decided.items():
+        looser = d.get("looser", {})
+        lines.append(f"| {check} | {fmt(d['maybe'])} | {fmt(looser.get('1/50'))} | {fmt(looser.get('1/10'))} | {d['why']} |")
     lines += ["", "## Native phones (LPR: log posterior of the phone minus its best competitor)", ""]
     lines += ["| phone | n | p1 | p5 | p10 | p50 | p90 |", "|---|---|---|---|---|---|---|"]
     for phone in sorted(tally.phone_lpr):
@@ -731,12 +813,15 @@ def stress_report(tally: Tally, stress: dict, args) -> list[str]:
         "(5: wrong; 10: right). L2-ARCTIC has no stress labels; without learner stress scores a native "
         "false-alarm cap alone says how rarely natives are flagged, not how often a learner's flag is right.",
         "",
-        "| combination | native words read | native rate at lead 0.05 | maybe | native rate at maybe | sure |",
-        "|---|---|---|---|---|---|",
+        "| combination | native words read | native rate at lead 0.05 | maybe | native rate at maybe | sure | "
+        "maybe at 1 in 50 | maybe at 1 in 10 |",
+        "|---|---|---|---|---|---|---|---|",
     ]
     for combo, c in stress["combos"].items():
+        looser = c.get("looser", {})
         lines.append(
-            f"| {combo} | {c['n']} | {fmt(c['rateAtZero'], 4)} | {fmt(c['maybe'])} | {fmt(c['rateAtMaybe'], 4)} | {fmt(c['sure'])} |"
+            f"| {combo} | {c['n']} | {fmt(c['rateAtZero'], 4)} | {fmt(c['maybe'])} | {fmt(c['rateAtMaybe'], 4)} | {fmt(c['sure'])} | "
+            f"{fmt(looser.get('1/50'))} | {fmt(looser.get('1/10'))} |"
         )
     cuts = {combo: c["maybe"] for combo, c in stress["combos"].items() if c["maybe"] is not None}
     lines += [

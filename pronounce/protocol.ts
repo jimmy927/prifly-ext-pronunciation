@@ -60,6 +60,13 @@ export const Judged = z.strictObject({
   posterior: z.number().min(0).max(1),
   /** The mark's level under its check's cut-offs (`thresholds.ts`). */
   level: z.enum(["sure", "maybe"]).optional(),
+  /** From which Sensitivity step it is drawn, and drawn sure (`sensitivity.ts`; 3: never sure). */
+  steps: z
+    .strictObject({
+      drawn: z.union([z.literal(0), z.literal(1), z.literal(2)]),
+      sure: z.union([z.literal(0), z.literal(1), z.literal(2), z.literal(3)]),
+    })
+    .optional(),
   said: z.string(),
   say: z.string(),
   fix: z.string(),

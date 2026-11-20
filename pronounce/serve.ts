@@ -15,6 +15,7 @@ import { scanFlags } from "./flags";
 import {
   contrastMarks,
   inWordOrder,
+  type Judged,
   type JudgeWord,
   type ReadPiece,
   readPiece,
@@ -32,14 +33,18 @@ import {
   WorkerRequest,
 } from "./protocol";
 import { scoresOfRead } from "./scores";
-import { loadStressCheck, type StressCheck, stressMarks } from "./stress";
+import { type Sensitivity, withSteps } from "./sensitivity";
+import { loadStressCheck, type StressCheck, stressCheckAt, stressMarks } from "./stress";
 import {
   type DeviateCuts,
+  type DeviateId,
+  deviateCutAt,
   deviateCutOf,
   loadDeviateCuts,
   loadThresholds,
   THRESHOLDS_PATH,
   type Thresholds,
+  thresholdsAt,
 } from "./thresholds";
 import { weakVowelMarks } from "./weak-vowels";
 
@@ -111,23 +116,40 @@ export async function loadAll(
   };
 }
 
+type MarkChecks = Pick<Loaded, "thresholds" | "stress" | "natives" | "deviateCuts">;
+
+/** Every check's marks of a piece at the cut-offs of Sensitivity step `step`. */
+function marksAtStep(
+  read: ReadPiece,
+  words: readonly JudgeWord[],
+  audio: Float32Array,
+  loaded: MarkChecks,
+  step: Sensitivity,
+): Judged[] {
+  const { stress, natives, deviateCuts } = loaded;
+  const deviateCut = (id: DeviateId) => deviateCutAt(deviateCutOf(deviateCuts, id), step);
+  return [
+    ...contrastMarks(read, words, thresholdsAt(loaded.thresholds, step)),
+    ...anySoundMarks(read, words, natives, deviateCut("any-sound")),
+    ...(stress === null ? [] : stressMarks(read, words, audio, stressCheckAt(stress, step))),
+    ...weakVowelMarks(read, words, natives, deviateCut("weak-vowels")),
+  ];
+}
+
 /**
  * Every check's marks of a piece already read (`checks.ts`), at most one a word per check, in
- * the order the coach draws them in; the vowels' are the extension's (`vowels.ts`).
+ * the order the coach draws them in; the vowels' are the extension's (`vowels.ts`). Each is
+ * judged at every Sensitivity step and carries the first that draws it (`withSteps`), so the
+ * setting applies without judging again.
  */
 export function marksOfRead(
   read: ReadPiece,
   words: readonly JudgeWord[],
   audio: Float32Array,
-  loaded: Pick<Loaded, "thresholds" | "stress" | "natives" | "deviateCuts">,
-) {
-  const { stress, natives, deviateCuts } = loaded;
-  return inWordOrder([
-    ...contrastMarks(read, words, loaded.thresholds),
-    ...anySoundMarks(read, words, natives, deviateCutOf(deviateCuts, "any-sound")),
-    ...(stress === null ? [] : stressMarks(read, words, audio, stress)),
-    ...weakVowelMarks(read, words, natives, deviateCutOf(deviateCuts, "weak-vowels")),
-  ]);
+  loaded: MarkChecks,
+): Judged[] {
+  const at = (step: Sensitivity) => marksAtStep(read, words, audio, loaded, step);
+  return inWordOrder(withSteps([at(0), at(1), at(2)]));
 }
 
 /** One request's marks and the accent profile's scores (`scores.ts`), or its failure as an `error` line for its id. */

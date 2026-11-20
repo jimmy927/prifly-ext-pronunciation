@@ -20,7 +20,9 @@
  * measured on native speech for that cue combination (`thresholds.json`'s
  * `stress` entry: at most 1 native word in 200 for "maybe", 1 in 1000 for
  * "sure"), and no other accepted pronunciation of the word stresses the
- * winning syllable. Precision comes first: a word in doubt is not marked.
+ * winning syllable. Precision comes first: a word in doubt is not marked. The
+ * Sensitivity setting's looser steps move "maybe" to where natives get 1 word
+ * in 50 and 1 in 10 (the entry's `looser`, `stressCheckAt`, `sensitivity.ts`).
  *
  * With no `stress` entry that ships in `thresholds.json`, or no native lead
  * statistics in `native-stats.json` (both written by one calibration run),
@@ -38,7 +40,8 @@ import { ownedSpans, type StressCues, stressCues } from "./gop";
 import { chosenOf, type Judged, type ReadPiece } from "./judge";
 import { isVowel } from "./phones";
 import { respell } from "./respell";
-import { THRESHOLDS_PATH } from "./thresholds";
+import { cutAtStep, type Sensitivity } from "./sensitivity";
+import { Looser, looserSteps, THRESHOLDS_PATH } from "./thresholds";
 
 /** The check's id in `thresholds.json`, beside the contrasts'. */
 export const STRESS_ID = "stress";
@@ -179,8 +182,12 @@ export function stressWordsOf(read: ReadPiece, audio: Float32Array): StressWord[
   });
 }
 
-/** A combination's cut-offs: from `maybe` up a lead is marked "maybe", from `sure` up "sure". */
-export type StressCut = { maybe: number; sure: number };
+/**
+ * A combination's cut-offs: from `maybe` up a lead is marked "maybe", from `sure` up "sure";
+ * `looser`: "maybe" at the Sensitivity steps 1 in 50 and 1 in 10 (`sensitivity.ts`), when
+ * the file gives them (without, the same lead at every step).
+ */
+export type StressCut = { maybe: number; sure: number; looser?: readonly [number, number] };
 
 /** Natives' leads as points of their distribution, `[lead, share of native words at or below it]`, by lead. */
 export type NativeLeads = readonly (readonly [number, number])[];
@@ -191,7 +198,11 @@ export type StressCheck = {
   natives: Partial<Record<Combo, NativeLeads>>;
 };
 
-const Cut = z.object({ maybe: z.number().positive(), sure: z.number().positive() });
+const Cut = z.object({
+  maybe: z.number().positive(),
+  sure: z.number().positive(),
+  looser: Looser.optional(),
+});
 const StressEntry = z.object({
   off: z.boolean(),
   cuts: z.partialRecord(z.enum(COMBOS), Cut).optional(),
@@ -239,7 +250,15 @@ export function parseStressCheck(
     const cut = entry.cuts?.[combo];
     const summary = leads[combo];
     if (cut === undefined || summary === undefined || (summary["n"] ?? 0) <= 0) continue;
-    check.cuts[combo] = { maybe: cut.maybe, sure: Math.max(cut.maybe, cut.sure) };
+    check.cuts[combo] = {
+      maybe: cut.maybe,
+      sure: Math.max(cut.maybe, cut.sure),
+      ...(cut.looser === undefined
+        ? {}
+        : {
+            looser: looserSteps(cut.maybe, cut.looser, [cut.maybe, cut.maybe], (a, b) => a > b),
+          }),
+    };
     check.natives[combo] = leadsOf(summary);
   }
   return Object.keys(check.cuts).length === 0 ? null : check;
@@ -266,6 +285,18 @@ export async function loadStressCheck(
     process.stderr.write(`pronounce: word stress off, ${thresholdsPath} or ${statsPath}: ${why}\n`);
     return null;
   }
+}
+
+/** `check` with each combination's cut-offs at Sensitivity step `step`; one without `looser` the same at every step. */
+export function stressCheckAt(check: StressCheck, step: Sensitivity): StressCheck {
+  const cuts: Partial<Record<Combo, StressCut>> = {};
+  for (const combo of COMBOS) {
+    const cut = check.cuts[combo];
+    if (cut === undefined) continue;
+    const { maybe, sure, looser } = cut;
+    cuts[combo] = looser === undefined ? { maybe, sure } : cutAtStep({ maybe, sure, looser }, step);
+  }
+  return { ...check, cuts };
 }
 
 /** The share of native words whose lead is at or below `lead`, between the natives' known points (`p99.9` the highest, so it stays under 1). */
@@ -303,6 +334,16 @@ export function stressFix(say: string, stressed: number, winner: number): string
 /** No sound is swapped in a stress respelling. */
 const NO_SWAP = { from: 0, to: 0 };
 
+/** How sure a mark of `reading` is under `check`'s cut-offs; null when it is not marked: another pronunciation stresses the winner, or the lead does not reach its combination's cut-off. */
+export function stressLevel(
+  reading: StressReading,
+  check: Pick<StressCheck, "cuts">,
+): "sure" | "maybe" | null {
+  const cut = check.cuts[reading.combo];
+  if (cut === undefined || reading.accepted || reading.lead < cut.maybe) return null;
+  return reading.lead >= cut.sure ? "sure" : "maybe";
+}
+
 /** Word `index`'s mark from its reading, or null when the reading does not reach its combination's cut-off. */
 function stressMark(
   read: ReadPiece,
@@ -311,11 +352,10 @@ function stressMark(
   reading: StressReading,
   check: StressCheck,
 ): Judged | null {
-  const cut = check.cuts[reading.combo];
+  const level = stressLevel(reading, check);
   const natives = check.natives[reading.combo];
   const chosen = chosenOf(read, index);
-  if (cut === undefined || natives === undefined || chosen === null) return null;
-  if (reading.accepted || reading.lead < cut.maybe) return null;
+  if (level === null || natives === undefined || chosen === null) return null;
   const vowelAt = vowelsOf(chosen.said);
   const said = respell(chosen.said, vowelAt[reading.winner] ?? -1, NO_SWAP, false);
   const say = respell(chosen.said, stressOf(chosen.said), NO_SWAP, false);
@@ -329,7 +369,7 @@ function stressMark(
     sound: `stress ${ordinal(reading.stressed)} → ${ordinal(reading.winner)}`,
     how: `stress ${(syllables[reading.stressed] ?? "").toUpperCase()}: louder, longer, a little higher`,
     posterior: nativeShare(reading.lead, natives),
-    level: reading.lead >= cut.sure ? "sure" : "maybe",
+    level,
     said,
     say,
     fix: stressFix(say, reading.stressed, reading.winner),

@@ -20,6 +20,7 @@ import type { PastPiece } from "./past-pieces";
 import type { Personal, Tally, Verdict } from "./personal";
 import { resample } from "./resample";
 import type { ScanAnswer, ScanWorker } from "./scan-worker";
+import { type Sensitivity, sensitivityLabel } from "./sensitivity";
 import { PIECE_RATE, type Voice } from "./voice";
 import type { Wav } from "./wav";
 
@@ -50,6 +51,14 @@ export function tallyLine(check: CheckId, tally: Tally, on: boolean): string {
     ? `Too many? Switch off ${label} in ${WHERE_SWITCHES}.`
     : `Off: switch on ${label} in ${WHERE_SWITCHES} to underline it again.`;
   return `${marked} ${hint}`;
+}
+
+/**
+ * The line naming the Sensitivity dictation is underlined at now: "Dictation is underlined at
+ * “Like 1 in 50 natives”: Sensitivity in Settings → Extensions → Pronunciation."
+ */
+export function sensitivityLine(step: Sensitivity): string {
+  return `Dictation is underlined at “${sensitivityLabel(step)}”: Sensitivity in ${WHERE_SWITCHES}.`;
 }
 
 const StoredFlag = z.object({
@@ -124,6 +133,8 @@ export type FlagsView = {
   yours: string | null;
   /** Why "Say it right" cannot play (no voice box set); null when it can. */
   sayRight: string | null;
+  /** The Sensitivity the session underlines at now (`sensitivityLine`). */
+  sensitivity: string;
   checks: CheckView[];
 };
 
@@ -144,6 +155,8 @@ export type FlagCheckDeps = {
   natives: () => NativeStats | null;
   /** The checks whose switch is on now (`checks.ts`'s `switchedOn`). */
   switchedOn: () => ReadonlySet<CheckId>;
+  /** The Sensitivity step now (`sensitivity.ts`'s `sensitivityOf`); left out, the default. */
+  sensitivity?: () => Sensitivity;
   voice: Pick<Voice, "yours" | "sayRight"> | null;
   /** Why "Say it right" cannot be made now; null when a voice box is set. */
   sayRight: () => string | null;
@@ -429,6 +442,7 @@ export class FlagCheck {
       canReset: personal.count() > 0,
       yours: this.deps.voice === null ? NO_VOICE : null,
       sayRight: this.deps.sayRight(),
+      sensitivity: sensitivityLine(this.deps.sensitivity?.() ?? 0),
       checks,
     };
   }

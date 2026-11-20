@@ -1,62 +1,72 @@
 {
   "generated": "2026-11-20",
   "source": "librispeech 2990, speechocean762 5000, vctk 3548",
+  "looserSource": "the Sensitivity steps (looser: natives at 1 in 50 and 1 in 10) added by hand from report.md and native-stats.json of the same run, as stats.py now computes them; the contrasts' curve there starts at 0.50, so stats.py's loosened_cut extrapolated it down to the 0.20 floor",
   "contrasts": {
     "z-s": {
       "off": false,
       "maybe": 0.5,
       "sure": 0.5,
-      "why": "natives: 0.07% of words at 0.50; learner precision 0.55 on 22 labelled flags (speechocean762's Mandarin learners)"
+      "looser": { "1/50": 0.2, "1/10": 0.2 },
+      "why": "natives: 0.07% of words at 0.50; learner precision 0.55 on 22 labelled flags (speechocean762's Mandarin learners); looser steps not reached on the natives' curve (0.50 to 0.99, at most 0.07% of words): extrapolated to the 0.20 floor"
     },
     "final-devoicing": {
       "off": false,
       "maybe": 0.5,
       "sure": 0.725,
-      "why": "natives: 0.15% of words at 0.50, 0.10% at 0.725; learner precision 0.17 on 411 labelled flags"
+      "looser": { "1/50": 0.2, "1/10": 0.2 },
+      "why": "natives: 0.15% of words at 0.50, 0.10% at 0.725; learner precision 0.17 on 411 labelled flags; looser steps not reached on the natives' curve (0.50 to 0.99, at most 0.15% of words): extrapolated to the 0.20 floor"
     },
     "th": {
       "off": false,
       "maybe": 0.5,
       "sure": 0.5,
-      "why": "natives: 0.09% of words at 0.50; learner precision 0.15 on 372 labelled flags"
+      "looser": { "1/50": 0.2, "1/10": 0.2 },
+      "why": "natives: 0.09% of words at 0.50; learner precision 0.15 on 372 labelled flags; looser steps not reached on the natives' curve (0.50 to 0.99, at most 0.09% of words): extrapolated to the 0.20 floor"
     },
     "w-v": {
       "off": false,
       "maybe": 0.5,
       "sure": 0.5,
-      "why": "natives: 0.00% of words at 0.50; learner precision 0.09 on 115 labelled flags"
+      "looser": { "1/50": 0.2, "1/10": 0.2 },
+      "why": "natives: 0.00% of words at 0.50; learner precision 0.09 on 115 labelled flags; looser steps not reached on the natives' curve (no native flag from 0.50 up): the 0.20 floor"
     },
     "sh-ch": {
       "off": false,
       "maybe": 0.5,
       "sure": 0.5,
-      "why": "natives: 0.07% of words at 0.50; learner precision 0.13 on 16 labelled flags"
+      "looser": { "1/50": 0.2, "1/10": 0.2 },
+      "why": "natives: 0.07% of words at 0.50; learner precision 0.13 on 16 labelled flags; looser steps not reached on the natives' curve (0.50 to 0.99, at most 0.07% of words): extrapolated to the 0.20 floor"
     },
     "stress": {
       "off": false,
       "cuts": {
         "dur+rms+f0": {
           "maybe": 1.15,
-          "sure": 1.6
+          "sure": 1.6,
+          "looser": { "1/50": 0.9, "1/10": 0.3 }
         },
         "dur+rms": {
           "maybe": 1.25,
-          "sure": 1.8
+          "sure": 1.8,
+          "looser": { "1/50": 0.9, "1/10": 0.3 }
         }
       },
-      "why": "learner precision 0.19 on 160 scored flags"
+      "why": "learner precision 0.19 on 160 scored flags; looser steps: the natives' lead p98 (0.86, 0.90) and p90 (0.29, 0.26) of native-stats.json, rounded up to stats.py's 0.05 grid"
     },
     "any-sound": {
       "off": false,
       "maybe": -2.5758,
       "sure": -3.0902,
-      "why": "not measured yet: the natives' 0.5th and 0.1th percentile per consonant until a calibration measures the rate per word"
+      "looser": { "1/50": -2.0537, "1/10": -1.2816 },
+      "why": "not measured yet: the natives' 0.5th and 0.1th percentile per consonant (2nd and 10th for the looser steps) until a calibration measures the rate per word"
     },
     "weak-vowels": {
       "off": false,
       "maybe": -2.5758,
       "sure": -3.0902,
-      "why": "not measured yet: the natives' 0.5th and 0.1th percentile for schwa until a calibration measures the rate per word"
+      "looser": { "1/50": -2.0537, "1/10": -1.2816 },
+      "why": "not measured yet: the natives' 0.5th and 0.1th percentile for schwa (2nd and 10th for the looser steps) until a calibration measures the rate per word"
     }
   }
 }
