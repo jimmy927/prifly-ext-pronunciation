@@ -9,13 +9,20 @@
 import { constants, setPriority } from "node:os";
 import { posteriors } from "./ctc";
 import { type Dictionary, mergeDictionaries, parseCmudict, parseDictionary } from "./dictionary";
-import { judgeWords, type Vocab, vocabFrom } from "./judge";
+import { scanFlags } from "./flags";
+import { judgeWords, readPiece, type Vocab, vocabFrom } from "./judge";
 import { exitWhenOrphaned } from "./lifetime";
 import { decodeFloats } from "./pcm";
-import { JudgeRequest, type PronounceArgs, type PronounceLine } from "./protocol";
-import { scorePiece } from "./scores";
-import { loadStressCheck, type StressCheck, stressMarks } from "./stress";
-import { loadThresholds, type Thresholds } from "./thresholds";
+import {
+  type JudgeRequest,
+  type PronounceArgs,
+  type PronounceLine,
+  type ScanRequest,
+  WorkerRequest,
+} from "./protocol";
+import { scorePiece, scoresOfRead } from "./scores";
+import { loadStressCheck, type StressCheck, stressMarks, withStressOverride } from "./stress";
+import { loadThresholds, type Thresholds, withOverrides } from "./thresholds";
 
 /** What the worker needs of the model: logits per frame for normalised 16 kHz audio. */
 export type PhoneModel = {
@@ -31,6 +38,8 @@ export type Loaded = {
   thresholds: Thresholds;
   /** Word stress (`stress.ts`); null while the calibration files do not turn it on. */
   stress: StressCheck | null;
+  /** Word stress read even where the file has it off: for the reader's own cut-off and the scan's flags; null without its data. */
+  stressAll: StressCheck | null;
 };
 
 /** `audio` scaled to zero mean and unit variance, as the model was trained on (`do_normalize`). */
@@ -57,28 +66,50 @@ export async function loadAll(
   );
   const thresholds = await loadThresholds(thresholdsPath);
   const stress = await loadStressCheck(thresholdsPath);
+  const stressAll = await loadStressCheck(thresholdsPath, undefined, true);
   const model = await open(args.model, args.threads);
-  return { model, vocab: vocabFrom(json), dictionary, thresholds, stress };
+  return { model, vocab: vocabFrom(json), dictionary, thresholds, stress, stressAll };
 }
 
-/** One request's marks and the accent profile's scores (`scores.ts`), or its failure as an `error` line for its id. */
+/**
+ * One request's marks and the accent profile's scores (`scores.ts`), or its failure as an
+ * `error` line for its id. The reader's own settings in `request.overrides` (`personal.ts`)
+ * beat `thresholds.json`'s for the checks they name.
+ */
 export async function answerJudge(request: JudgeRequest, loaded: Loaded): Promise<PronounceLine> {
   const started = performance.now();
   try {
     const audio = decodeFloats(request.pcm);
     const out = await loaded.model.logits(normalised(audio));
     const post = posteriors(out.data, out.frames, out.size);
-    const { stress } = loaded;
+    const own = request.overrides;
+    const stress = withStressOverride(loaded.stress, loaded.stressAll, own?.stress);
     const marks = judgeWords(
       post,
       loaded.vocab,
       loaded.dictionary,
       request.words,
-      loaded.thresholds,
+      withOverrides(loaded.thresholds, own?.contrasts),
       stress === null ? undefined : (read) => stressMarks(read, request.words, audio, stress),
     );
     const scores = scorePiece(post, loaded.vocab, loaded.dictionary, request.words);
     return { type: "marks", id: request.id, marks, scores, ms: performance.now() - started };
+  } catch (caught) {
+    return { type: "error", id: request.id, message: String(caught) };
+  }
+}
+
+/** A scan: every candidate flag of the piece from every check, at loose cut-offs (`flags.ts`), and its scores. */
+export async function answerScan(request: ScanRequest, loaded: Loaded): Promise<PronounceLine> {
+  const started = performance.now();
+  try {
+    const audio = decodeFloats(request.pcm);
+    const out = await loaded.model.logits(normalised(audio));
+    const post = posteriors(out.data, out.frames, out.size);
+    const read = readPiece(post, loaded.vocab, loaded.dictionary, request.words);
+    const flags = read === null ? [] : scanFlags(read, request.words, audio, loaded.stressAll);
+    const scores = read === null ? [] : scoresOfRead(read);
+    return { type: "flags", id: request.id, flags, scores, ms: performance.now() - started };
   } catch (caught) {
     return { type: "error", id: request.id, message: String(caught) };
   }
@@ -129,6 +160,11 @@ export async function servePronounce(args: PronounceArgs, open: OpenModel): Prom
   say({ type: "ready" });
   for await (const line of console) {
     if (line.trim() === "") continue;
-    say(await answerJudge(JudgeRequest.parse(JSON.parse(line)), loaded));
+    const request = WorkerRequest.parse(JSON.parse(line));
+    say(
+      request.op === "scan"
+        ? await answerScan(request, loaded)
+        : await answerJudge(request, loaded),
+    );
   }
 }

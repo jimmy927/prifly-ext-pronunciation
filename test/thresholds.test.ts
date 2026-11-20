@@ -2,16 +2,18 @@ import { expect, test } from "bun:test";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { contrastId } from "../pronounce/contrasts";
+import { CONTRAST_IDS, contrastId } from "../pronounce/contrasts";
 import { type Candidate, marks } from "../pronounce/judge";
 import {
   cutOf,
   DEFAULT_CUT,
+  loadShipped,
   loadThresholds,
   loadVowelPatterns,
   parseThresholds,
   parseVowelPatterns,
   THRESHOLDS_PATH,
+  withOverrides,
 } from "../pronounce/thresholds";
 
 test("no file keeps every check at 0.70 / 0.88", async () => {
@@ -95,4 +97,38 @@ test("the shipped file has the vowel underlines off and Z/S on at 0.70 / 0.88, e
   expect(marks(heard(0.69), shipped)).toBe(false);
   expect(marks(heard(0.7), shipped)).toBe(true);
   expect(marks({ ...heard(0.99), id: "th" }, shipped)).toBe(false);
+});
+
+test("the reader's own settings beat the file's: on from their cut-off, off, and the rest as the file has them", async () => {
+  const shipped = await loadThresholds(THRESHOLDS_PATH);
+  const own = withOverrides(shipped, {
+    th: { off: false, maybe: 0.62 },
+    "z-s": { off: true, maybe: 1 },
+    "w-v": { off: false, maybe: 0.95 },
+  });
+  // th's sure in the file is 0.5: it is raised to the reader's cut-off.
+  expect(cutOf(own, "th")).toEqual({ maybe: 0.62, sure: 0.62, off: false });
+  expect(cutOf(own, "z-s").off).toBe(true);
+  expect(cutOf(own, "w-v")).toEqual({ maybe: 0.95, sure: 0.95, off: false });
+  expect(cutOf(own, "sh-ch")).toEqual(cutOf(shipped, "sh-ch"));
+  expect(withOverrides(shipped, undefined)).toBe(shipped);
+  // The file itself is untouched.
+  expect(cutOf(shipped, "z-s").off).toBe(false);
+});
+
+test("the shipped file ships Z/S on and every other check off; no file ships the contrasts only", async () => {
+  expect([...(await loadShipped(THRESHOLDS_PATH))]).toEqual(["z-s"]);
+  const folder = await mkdtemp(join(tmpdir(), "thresholds-"));
+  expect([...(await loadShipped(join(folder, "none.json")))]).toEqual([...CONTRAST_IDS]);
+  const file = join(folder, "on.json");
+  await writeFile(
+    file,
+    JSON.stringify({
+      contrasts: { th: { off: true }, stress: { off: false }, "vowel-patterns": { off: false } },
+    }),
+  );
+  const on: string[] = [...(await loadShipped(file))];
+  expect(on.sort()).toEqual(
+    ["final-devoicing", "sh-ch", "stress", "vowel-patterns", "w-v", "z-s"].sort(),
+  );
 });

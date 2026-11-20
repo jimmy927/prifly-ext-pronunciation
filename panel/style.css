@@ -12,6 +12,8 @@
   --primary: #2a78d6;
   --primary-fg: #ffffff;
   --far: #d95926;
+  --on: #2f8a4c;
+  --mark: #fde7a8;
   --error: #c0362c;
   --font: system-ui, -apple-system, "Segoe UI", sans-serif;
 }
@@ -27,6 +29,8 @@
     --accent: #222730;
     --primary: #3987e5;
     --far: #eb6834;
+    --on: #4cb36c;
+    --mark: #5a4a1c;
     --error: #f06a5f;
   }
 }
@@ -41,6 +45,8 @@
   --accent: #222730;
   --primary: #3987e5;
   --far: #eb6834;
+  --on: #4cb36c;
+  --mark: #5a4a1c;
   --error: #f06a5f;
 }
 
@@ -187,4 +193,192 @@ p {
 .collecting b {
   color: var(--fg);
   font-weight: 600;
+}
+
+/* The two tabs: the profile, and "Check your flags". */
+.tabs {
+  display: flex;
+  gap: 4px;
+  border-bottom: 1px solid var(--border);
+}
+.tab {
+  font: inherit;
+  color: var(--muted-fg);
+  background: transparent;
+  border: 0;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  padding: 6px 10px;
+  cursor: pointer;
+}
+.tab[aria-selected="true"] {
+  color: var(--fg);
+  border-bottom-color: var(--primary);
+  font-weight: 600;
+}
+#profile-view,
+#flags-view {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+#profile-view[hidden],
+#flags-view[hidden] {
+  display: none;
+}
+
+/* "Check your flags". */
+.job {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.job-buttons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+.btn.primary {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: var(--primary-fg);
+}
+.btn.primary:hover:not(:disabled) {
+  background: var(--primary);
+  filter: brightness(1.08);
+}
+.job-line {
+  color: var(--muted-fg);
+}
+.progress {
+  height: 4px;
+  border-radius: 2px;
+  background: var(--muted);
+  overflow: hidden;
+  visibility: hidden;
+}
+.progress.active {
+  visibility: visible;
+}
+.progress-bar {
+  height: 100%;
+  width: 0;
+  background: var(--primary);
+  transition: width 0.4s;
+}
+.check {
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  background: var(--card);
+  padding: 10px 14px;
+}
+.check + .check {
+  margin-top: 10px;
+}
+.check-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 10px;
+  cursor: pointer;
+}
+.check-head h2 {
+  display: inline;
+}
+.badge {
+  font-size: 11px;
+  padding: 0 6px;
+  border-radius: 9px;
+  background: var(--accent);
+  color: var(--muted-fg);
+}
+.tally {
+  color: var(--muted-fg);
+  margin-left: auto;
+}
+.result {
+  margin-top: 4px;
+  font-weight: 600;
+}
+.result-on .result {
+  color: var(--on);
+}
+.result-off .result {
+  color: var(--far);
+}
+.result-few .result {
+  color: var(--muted-fg);
+  font-weight: 400;
+}
+.none {
+  color: var(--muted-fg);
+  margin-top: 6px;
+}
+.flag-rows {
+  list-style: none;
+  margin: 8px 0 0;
+  padding: 0;
+  display: flex;
+  flex-direction: column;
+}
+.flag-row {
+  display: grid;
+  grid-template-columns: 40px 1fr auto;
+  grid-template-areas:
+    "score sentence buttons"
+    "score sound buttons";
+  gap: 0 12px;
+  align-items: center;
+  padding: 6px 0;
+  border-top: 1px solid var(--border);
+}
+.flag-row .score {
+  grid-area: score;
+  font-variant-numeric: tabular-nums;
+  color: var(--muted-fg);
+}
+.flag-row .sentence {
+  grid-area: sentence;
+}
+.flag-row mark {
+  background: var(--mark);
+  color: inherit;
+  font-weight: 600;
+  border-radius: 3px;
+  padding: 0 2px;
+}
+.flag-row .sound {
+  grid-area: sound;
+  color: var(--muted-fg);
+  font-size: 12px;
+}
+.row-buttons {
+  grid-area: buttons;
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  gap: 6px;
+}
+.verdict.right[aria-pressed="true"] {
+  background: var(--on);
+  border-color: var(--on);
+  color: var(--primary-fg);
+}
+.verdict.wrong[aria-pressed="true"] {
+  background: var(--far);
+  border-color: var(--far);
+  color: var(--primary-fg);
+}
+@media (max-width: 560px) {
+  .flag-row {
+    grid-template-columns: 36px 1fr;
+    grid-template-areas:
+      "score sentence"
+      "score sound"
+      "score buttons";
+  }
+  .row-buttons {
+    justify-content: flex-start;
+    margin-top: 4px;
+  }
 }

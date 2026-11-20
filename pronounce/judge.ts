@@ -343,6 +343,18 @@ function judgeWord(
   };
 }
 
+/** The contrasts' marks of a piece already read (`readPiece`), at most one a word, in the words' order. */
+export function contrastMarks(
+  read: ReadPiece,
+  words: readonly JudgeWord[],
+  thresholds: Thresholds,
+): Judged[] {
+  return words.flatMap((word, index) => {
+    const judged = judgeWord(read, index, word, thresholds);
+    return judged === null ? [] : [judged];
+  });
+}
+
 /** Marks of another kind for a piece once read (word stress, `stress.ts`), handed in by the worker so this file needs none of their data. */
 export type MoreMarks = (read: ReadPiece) => readonly Judged[];
 
@@ -361,10 +373,7 @@ export function judgeWords(
 ): Judged[] {
   const read = readPiece(post, vocab, dictionary, words);
   if (read === null) return [];
-  const found = words.flatMap((word, index) => {
-    const judged = judgeWord(read, index, word, thresholds);
-    return judged === null ? [] : [judged];
-  });
+  const found = contrastMarks(read, words, thresholds);
   if (more === undefined) return found;
   const marked = new Set(found.map((one) => one.index));
   const extra = more(read).filter((one) => !marked.has(one.index));

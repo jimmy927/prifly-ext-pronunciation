@@ -4,26 +4,60 @@
  * words to check and where each was said, and the worker answers with the
  * words said otherwise (`judge.ts`) and the content words' scores for the
  * accent profile (`scores.ts`). The worker says `ready` once the model and
- * the dictionary are loaded.
+ * the dictionary are loaded. A `scan` (for "Check your flags", `scan-worker.ts`)
+ * is answered with every candidate flag of the piece instead (`flags.ts`).
  */
 
 import { z } from "zod";
 import { CONTRAST_IDS } from "./contrasts";
+import { CHECK_IDS } from "./thresholds";
+
+const Words = z.array(
+  z.strictObject({
+    word: z.string().min(1),
+    from: z.number().int().min(0),
+    to: z.number().int().min(0),
+  }),
+);
+
+/** The reader's own setting of a check (`personal.ts`): on from `maybe` up, or off. */
+const Override = z.strictObject({ off: z.boolean(), maybe: z.number() });
+
+/** The reader's own settings, which beat `thresholds.json`'s for the checks they name. */
+export const Overrides = z.strictObject({
+  contrasts: z.partialRecord(z.enum(CONTRAST_IDS), Override).optional(),
+  stress: Override.optional(),
+});
+export type Overrides = z.infer<typeof Overrides>;
 
 /** `pcm`: the piece's 16 kHz mono float32 samples, little-endian, base64; each word's samples in it. */
 export const JudgeRequest = z.strictObject({
   op: z.literal("judge"),
   id: z.string(),
   pcm: z.string(),
-  words: z.array(
-    z.strictObject({
-      word: z.string().min(1),
-      from: z.number().int().min(0),
-      to: z.number().int().min(0),
-    }),
-  ),
+  words: Words,
+  overrides: Overrides.optional(),
 });
 export type JudgeRequest = z.infer<typeof JudgeRequest>;
+
+/** Every candidate flag of a piece, from every check, at loose cut-offs (`flags.ts`), for "Check your flags". */
+export const ScanRequest = z.strictObject({
+  op: z.literal("scan"),
+  id: z.string(),
+  pcm: z.string(),
+  words: Words,
+});
+export type ScanRequest = z.infer<typeof ScanRequest>;
+
+export const WorkerRequest = z.discriminatedUnion("op", [JudgeRequest, ScanRequest]);
+
+export const Flag = z.strictObject({
+  index: z.number().int().min(0),
+  check: z.enum(CHECK_IDS),
+  score: z.number(),
+  sound: z.string(),
+  fix: z.string(),
+});
 
 export const Judged = z.strictObject({
   index: z.number().int().min(0),
@@ -66,6 +100,14 @@ export const PronounceLine = z.discriminatedUnion("type", [
     id: z.string(),
     marks: z.array(Judged),
     /** The piece's content words scored for the accent profile. */
+    scores: z.array(WordScores).default([]),
+    ms: z.number(),
+  }),
+  /** A scan's answer: the piece's candidate flags, and its content words' scores for the vowels'. */
+  z.strictObject({
+    type: z.literal("flags"),
+    id: z.string(),
+    flags: z.array(Flag),
     scores: z.array(WordScores).default([]),
     ms: z.number(),
   }),

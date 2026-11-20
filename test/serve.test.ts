@@ -5,7 +5,15 @@ import { join } from "node:path";
 import { engineLoadError } from "../pronounce/engine";
 import { exitWhenOrphaned } from "../pronounce/lifetime";
 import { decodeFloats, encodeFloats } from "../pronounce/pcm";
-import { answerJudge, loadAll, lowPriority, normalised, type PhoneModel } from "../pronounce/serve";
+import { PronounceLine } from "../pronounce/protocol";
+import {
+  answerJudge,
+  answerScan,
+  loadAll,
+  lowPriority,
+  normalised,
+  type PhoneModel,
+} from "../pronounce/serve";
 
 const VOCAB = { "<pad>": 0, "<s>": 1, "</s>": 2, "<unk>": 3, θ: 4, t: 5, ɹ: 6, iː: 7 };
 
@@ -82,6 +90,41 @@ test("the worker loads the model on the threads it is given, and answers a piece
   const [audio] = given;
   expect(audio).toHaveLength(3);
   expect(Math.abs((audio?.reduce((a, b) => a + b, 0) ?? 1) / 3)).toBeLessThan(1e-6);
+});
+
+test("the reader's own setting beats thresholds.json: on where the file has it off, off where on", async () => {
+  const { all } = await loaded([], { contrasts: { th: { off: true } } });
+  const on = { contrasts: { th: { off: false, maybe: 0.6 } } };
+  expect(await answerJudge({ ...TWO_WORDS, overrides: on }, all)).toMatchObject({
+    type: "marks",
+    marks: [{ index: 0, word: "three", sound: "th → t", level: "sure" }],
+  });
+  // A cut-off above the model's posterior (about 1 here) marks nothing.
+  const high = { contrasts: { th: { off: false, maybe: 1.01 } } };
+  expect(await answerJudge({ ...TWO_WORDS, overrides: high }, all)).toMatchObject({ marks: [] });
+
+  const { all: shipped } = await loaded([]);
+  expect(await answerJudge(TWO_WORDS, shipped)).toMatchObject({ marks: [{ index: 0 }] });
+  const off = { contrasts: { th: { off: true, maybe: 1 } } };
+  expect(await answerJudge({ ...TWO_WORDS, overrides: off }, shipped)).toMatchObject({ marks: [] });
+  // A setting for another check leaves this one as the file has it.
+  const other = { contrasts: { "z-s": { off: true, maybe: 1 } } };
+  expect(await answerJudge({ ...TWO_WORDS, overrides: other }, shipped)).toMatchObject({
+    marks: [{ index: 0 }],
+  });
+});
+
+test("a scan flags every check, the ones thresholds.json turns off too, with the scores for the vowels", async () => {
+  const { all } = await loaded([], { contrasts: { th: { off: true } } });
+  const answer = await answerScan({ ...TWO_WORDS, op: "scan" }, all);
+  // Every line the worker says reads as the protocol says.
+  expect(PronounceLine.parse(answer)).toMatchObject({ type: "flags" });
+  expect(answer.type === "flags" ? answer.scores.map((one) => one.index) : []).toEqual([0, 1]);
+  expect(answer).toMatchObject({
+    type: "flags",
+    id: "7",
+    flags: [{ index: 0, check: "th", sound: "th → t", score: expect.closeTo(1, 2) }],
+  });
 });
 
 test("a model that throws answers that piece with an error line", async () => {

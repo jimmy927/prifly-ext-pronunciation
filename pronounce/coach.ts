@@ -30,6 +30,7 @@ import type {
 import { confirmedMarks } from "./confirmed";
 import { wordKey } from "./dictionary";
 import { type Judged, type JudgeWord, levelOf } from "./judge";
+import { Z_P05 } from "./native";
 import { isNotMistake, type NotMistake, StoredNotMistakes, withNotMistake } from "./not-mistakes";
 import {
   type AudioFull,
@@ -154,8 +155,10 @@ export class Coach {
   private readonly judge: JudgeFn;
   private readonly voice: Pick<Voice, "yours" | "sayRight"> | null;
   private readonly profile: AccentProfile | null;
-  /** Whether `thresholds.json` turns the confirmed-pattern underlines on; off unless it says so. */
+  /** Whether the confirmed-pattern underlines are on: the reader's own setting (`personal.ts`), else `thresholds.json`'s; off unless one says so. */
   private readonly patternsOn: () => boolean;
+  /** The native deviate a vowel must sit below for them: `Z_P05`, or the reader's own. */
+  private readonly patternCut: () => number;
   private notMistakes: NotMistake[] = [];
   /** Each session's last dictation: its id, and its pieces by number. */
   private readonly kept = new Map<string, { dict: string; pieces: Map<number, KeptPiece> }>();
@@ -172,8 +175,10 @@ export class Coach {
     voice: Pick<Voice, "yours" | "sayRight"> | null = null,
     profile: AccentProfile | null = null,
     patternsOn: () => boolean = () => false,
+    patternCut: () => number = () => Z_P05,
   ) {
     this.patternsOn = patternsOn;
+    this.patternCut = patternCut;
     this.api = api;
     this.judge = judge;
     this.voice = voice;
@@ -247,6 +252,7 @@ export class Coach {
       this.profile.assessed(),
       this.profile.nativeStats(),
       new Set(judged.marks.map((one) => one.index)),
+      this.patternCut(),
     );
   }
 

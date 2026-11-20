@@ -14,7 +14,7 @@ import { ShaMismatch } from "./download";
 import type { JudgeWord } from "./judge";
 import type { Fetching, PronounceFiles } from "./models";
 import { encodeFloats } from "./pcm";
-import { type PronounceArgs, PronounceLine } from "./protocol";
+import { type Overrides, type PronounceArgs, PronounceLine } from "./protocol";
 import type { Judgement } from "./scores";
 import type { WorkerPipe } from "./worker-pipe";
 
@@ -135,6 +135,9 @@ export class PronounceRunner {
       this.calls.answer(msg.id, { marks: msg.marks, scores: msg.scores });
     } else if (msg.type === "unavailable") {
       this.unavailable = msg.message;
+    } else if (msg.type === "flags") {
+      // Only a scan is answered with flags, and this worker is asked for none (`scan-worker.ts` is).
+      this.deps.log("badLine", { line: line.slice(0, 200) });
     } else {
       this.deps.log("judgeError", { message: msg.message });
       this.calls.answer(msg.id, null);
@@ -178,8 +181,16 @@ export class PronounceRunner {
     this.set("off");
   }
 
-  /** The words of `audio` said otherwise, and its content words' scores; null while the worker is not ready, or when it could not say. */
-  judge(audio: Float32Array, words: readonly JudgeWord[]): Promise<Judgement | null> {
+  /**
+   * The words of `audio` said otherwise, and its content words' scores; null while the worker is
+   * not ready, or when it could not say. `overrides`, the reader's own settings of the checks
+   * (`personal.ts`), beat `thresholds.json`'s.
+   */
+  judge(
+    audio: Float32Array,
+    words: readonly JudgeWord[],
+    overrides?: Overrides,
+  ): Promise<Judgement | null> {
     const { pipe } = this;
     if (this.state !== "ready" || pipe === null || words.length === 0) return Promise.resolve(null);
     // Only what the worker's strict request takes.
@@ -189,6 +200,7 @@ export class PronounceRunner {
       id,
       pcm: encodeFloats(audio),
       words: asked,
+      ...(overrides === undefined ? {} : { overrides }),
     }));
   }
 }

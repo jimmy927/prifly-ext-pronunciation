@@ -2,8 +2,9 @@
  * The extension put together: on enable the runner fetches the model and
  * the dictionary and starts the worker, its state on the status line; the
  * coach hears dictation and marks words, and adds each judged piece to the
- * accent profile, which the "Your accent" window shows (`accent-panel.ts`);
- * on disable the worker and any
+ * accent profile, which the "Your accent" window shows (`accent-panel.ts`),
+ * beside "Check your flags" (`flag-check.ts`), whose marks set the checks for
+ * this reader (`personal.ts`); on disable the worker and any
  * download on its way are stopped. What fetches and what starts the worker
  * are handed in (`StartDeps`), so tests run it over fakes; `index.ts` hands
  * in the real ones.
@@ -15,13 +16,17 @@ import type { ExtensionApi } from "@prifly/extension-api";
 import { AccentPanel } from "./accent-panel";
 import { SeedVcBox } from "./box";
 import { Coach } from "./coach";
+import { FlagCheck, type FlagCheckDeps } from "./flag-check";
 import { ensurePronounce, priflyDataDir } from "./models";
 import { loadNativeStats, type NativeStats } from "./native";
+import { RECORDINGS_FOLDER, readPast, recentPieces } from "./past-pieces";
+import { Personal, vowelSetting } from "./personal";
 import type { OnMarkAction } from "./play-shim";
 import { AccentProfile } from "./profile";
 import { PronounceRunner, type RunnerDeps } from "./runner";
+import { startScanWorker } from "./scan-worker";
 import { statusLine } from "./status";
-import { loadVowelPatterns } from "./thresholds";
+import { type CheckId, loadShipped, loadVowelPatterns } from "./thresholds";
 import { readReference, Voice } from "./voice";
 import { spawnPronounce } from "./worker-pipe";
 
@@ -34,6 +39,10 @@ export type StartDeps = Pick<RunnerDeps, "ensure" | "spawn" | "backoffMs"> & {
   vowelPatterns?: () => Promise<boolean>;
   /** Clock for the accent profile; tests set it. */
   now?: () => number;
+  /** The reader's past dictation for "Check your flags" (`past-pieces.ts`); left out, there is none. */
+  past?: Pick<FlagCheckDeps, "list" | "read">;
+  /** The checks `thresholds.json` ships on (`loadShipped`); left out, the file is read. */
+  shipped?: () => Promise<ReadonlySet<CheckId>>;
 };
 
 /** What the extension needs of prifly: the dictation api, 0.16 and later. */
@@ -74,25 +83,47 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
   });
   let natives: NativeStats | null = null;
   const profile = new AccentProfile(api.state, () => natives, deps.now);
+  const personal = new Personal(api.state);
   let patternsOn = false;
+  // The reader's own settings from their marks beat thresholds.json's (`personal.ts`).
+  const vowels = () => vowelSetting(personal.results(), patternsOn);
   const coach = new Coach(
     api,
-    (audio, words) => runner.judge(audio, words),
+    (audio, words) => runner.judge(audio, words, personal.overrides()),
     deps.voice ?? null,
     profile,
-    () => patternsOn,
+    () => vowels().on,
+    () => vowels().deviate,
   );
-  const panel = new AccentPanel({
-    profile,
-    coach,
-    sayRight: () => (String(api.settings?.[VOICE_BOX] ?? "").trim() === "" ? NO_BOX : null),
+  const sayRight = () => (String(api.settings?.[VOICE_BOX] ?? "").trim() === "" ? NO_BOX : null);
+  let shipped: ReadonlySet<CheckId> = new Set();
+  const flags = new FlagCheck({
+    state: api.state,
+    personal,
+    list: deps.past?.list ?? (async () => []),
+    read:
+      deps.past?.read ??
+      (() => Promise.reject(new Error("No past dictation is read without prifly's recordings"))),
+    worker: (signal) => startScanWorker(deps, signal),
+    natives: () => natives,
+    shipped: () => shipped,
+    voice: deps.voice ?? null,
+    sayRight,
+    ...(deps.now === undefined ? {} : { now: deps.now }),
+    log: (event, fields) => api.log(event, fields),
   });
+  const panel = new AccentPanel({ profile, coach, sayRight, flags });
   api.onDictationPiece((piece) => coach.piece(piece));
   api.onDictationCorrection?.((correction) => coach.correction(correction));
   // With "dictation-mark-audio" prifly plays what a click's handler resolves to.
   (api.onDictationMarkAction as OnMarkAction | undefined)?.((click) => coach.action(click));
   void coach.load();
   void profile.load();
+  void personal.load();
+  void flags.load();
+  void (deps.shipped ?? (() => loadShipped()))().then((on) => {
+    shipped = on;
+  });
   const readNatives =
     deps.natives ??
     (() => loadNativeStats(undefined, (why) => api.log("nativeStatsIgnored", { why })));
@@ -106,6 +137,7 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
   api.log("activated", {});
   return {
     stop: () => {
+      flags.cancel();
       coach.stop();
       runner.stop();
     },
@@ -145,8 +177,10 @@ export function realDeps(api: Pick<ExtensionApi, "log" | "settings">): StartDeps
       text(VOICE_REFERENCE) === "" ? null : readReference(text(VOICE_REFERENCE)),
     log: (event, fields) => api.log(event, fields),
   });
+  const recordings = join(data, RECORDINGS_FOLDER);
   return {
     voice,
+    past: { list: (limit) => recentPieces(recordings, limit), read: readPast },
     ensure: (progress, signal) => ensurePronounce(data, progress, { signal }),
     spawn: (args) =>
       spawnPronounce(args, (line) => api.log("worker", { line: line.slice(0, 500) })),

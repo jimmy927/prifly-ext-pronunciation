@@ -118,3 +118,60 @@ export function cutOf(thresholds: Thresholds, id: ContrastId): Cut {
 export function levelAt(posterior: number, cut: Cut): "sure" | "maybe" {
   return posterior >= cut.sure ? "sure" : "maybe";
 }
+
+/**
+ * Every check the reader can mark flags of ("Check your flags", `flag-check.ts`): the five
+ * contrasts, word stress (`stress.ts`) and the confirmed-pattern vowels (`confirmed.ts`).
+ */
+export const CHECK_IDS = [...CONTRAST_IDS, "stress", VOWEL_PATTERNS_ID] as const;
+export type CheckId = (typeof CHECK_IDS)[number];
+
+/**
+ * The checks the file ships on: each contrast it does not turn off, word stress when its entry
+ * says `"off": false`, the vowel patterns as `parseVowelPatterns` reads them. No file: the
+ * contrasts only. Read for the "Check your flags" page; the worker reads the file itself.
+ */
+export async function loadShipped(path: string = THRESHOLDS_PATH): Promise<Set<CheckId>> {
+  const contrasts = await loadThresholds(path);
+  const on = new Set<CheckId>(CONTRAST_IDS.filter((id) => !cutOf(contrasts, id).off));
+  const file = Bun.file(path);
+  if (!(await file.exists())) return on;
+  try {
+    const json: unknown = await file.json();
+    const stress = Switch.safeParse(File.parse(json).contrasts["stress"]);
+    if (stress.success && stress.data.off === false) on.add("stress");
+    if (parseVowelPatterns(json)) on.add(VOWEL_PATTERNS_ID);
+  } catch {
+    // Said on stderr by `loadThresholds` already; the contrasts' answer stands.
+  }
+  return on;
+}
+
+/** A reader's own setting of one check, from their marks (`personal.ts`): on from `maybe` up, or off. */
+export type Override = { off: boolean; maybe: number };
+
+/**
+ * `thresholds` with the reader's own settings over it: a check the reader's marks turned on is
+ * marked from their cut-off (sure from the file's sure, or from theirs when it is higher), one
+ * they turned off is never marked, whatever `thresholds.json` says; a check they have no setting
+ * for keeps the file's.
+ */
+export function withOverrides(
+  thresholds: Thresholds,
+  overrides: Partial<Record<ContrastId, Override>> | undefined,
+): Thresholds {
+  if (overrides === undefined) return thresholds;
+  const cuts = new Map(thresholds);
+  for (const id of CONTRAST_IDS) {
+    const own = overrides[id];
+    if (own === undefined) continue;
+    const file = cutOf(thresholds, id);
+    cuts.set(
+      id,
+      own.off
+        ? { ...file, off: true }
+        : { maybe: own.maybe, sure: Math.max(own.maybe, file.sure), off: false },
+    );
+  }
+  return cuts;
+}

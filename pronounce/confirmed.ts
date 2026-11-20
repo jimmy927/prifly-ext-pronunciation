@@ -6,7 +6,9 @@
  * later word with that vowel is underlined when, in that word,
  *
  * - the vowel sits past the natives' 0.5th percentile (`Z_P05`): at most 1
- *   native word in 200 would be underlined, were the pattern a native's;
+ *   native word in 200 would be underlined, were the pattern a native's (or
+ *   past the reader's own cut-off, once their marks in "Check your flags"
+ *   set one, `personal.ts`);
  * - the sound the model liked best instead is the pattern's own (the A in
  *   "cap" for an open U in "cup"), so the card's words hold for this word too;
  * - no other check marked the word already.
@@ -35,6 +37,7 @@ function worstVowel(
   word: WordScores,
   patterns: ReadonlyMap<string, Assessed>,
   stats: NativeStats,
+  cut: number,
 ): Found | null {
   let worst: Found | null = null;
   for (const vowel of word.vowels) {
@@ -43,7 +46,7 @@ function worstVowel(
     const curve = curveOfKey(stats, key);
     if (pattern === undefined || curve === null || pattern.rival === "") continue;
     if (!samePhone(vowel.rival, pattern.rival)) continue;
-    if (vowel.lpr > valueAt(curve, Z_P05)) continue;
+    if (vowel.lpr > valueAt(curve, cut)) continue;
     const deviate = deviateOf(curve, vowel.lpr);
     if (worst === null || deviate < worst.deviate) worst = { vowel, rival: pattern.rival, deviate };
   }
@@ -76,7 +79,9 @@ function markOf(scores: WordScores, text: string, found: Found): Judged | null {
 /**
  * The confirmed-pattern marks of a piece: `scores` are its content words',
  * `texts` every word's text by index, `assessed` the profile now, `taken` the
- * words another check marked. None without native statistics.
+ * words another check marked. None without native statistics. `cut` is the
+ * native deviate a vowel must sit below: `Z_P05`, or the reader's own from
+ * their marks (`personal.ts`).
  */
 export function confirmedMarks(
   scores: readonly WordScores[],
@@ -84,6 +89,7 @@ export function confirmedMarks(
   assessed: readonly Assessed[],
   stats: NativeStats | null,
   taken: ReadonlySet<number>,
+  cut: number = Z_P05,
 ): Judged[] {
   if (stats === null) return [];
   const patterns = new Map(
@@ -95,7 +101,7 @@ export function confirmedMarks(
   return scores.flatMap((word): Judged[] => {
     const text = texts[word.index];
     if (text === undefined || taken.has(word.index)) return [];
-    const found = worstVowel(word, patterns, stats);
+    const found = worstVowel(word, patterns, stats, cut);
     const mark = found === null ? null : markOf(word, text, found);
     return mark === null ? [] : [mark];
   });

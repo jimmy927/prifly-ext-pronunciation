@@ -125,6 +125,30 @@ entry of `thresholds.json`: they are drawn only when it says `"off": false`;
 no entry, or no file, is off. The accent profile and the "Your accent" panel
 do not depend on it: they only show.
 
+### Your own cut-offs: Check your flags
+
+The calibration's learners were Mandarin speakers; the second tab of "Your
+accent", "Check your flags", tailors the checks to the reader's own voice.
+"Score my last 200 sentences" takes the newest 200 English pieces of prifly's
+dictation recordings (Settings, Dictation, "Keep recordings of my dictation";
+only pieces with the microphone's full-rate audio) and scores them in the
+background on a worker of its own, two threads, one piece at a time, with a
+progress line and Cancel. Every candidate of every check is listed, the ones
+that are off included, at loose cut-offs: a contrast from posterior 0.5, word
+stress from its `maybe` lead, a vowel past the natives' 5th percentile. Each row
+plays the reader's own word ("Yours"), says it right, and takes a Right or Wrong.
+
+Per check, the lowest score at which at least 80% of the reader's marked flags at
+or above it are Right, with at least 15 of them, turns the check on for them
+from that score; 15 or more marks and no such score turn it off for them; fewer
+leave it as `thresholds.json` ships it. These settings are kept in `api.state`
+(`personal-cuts`) and sent with each piece to the worker, where they beat the
+file (`pronounce/personal.ts`, `withOverrides`). "Reset marks" clears them.
+
+prifly's extension api has no call for past dictation; the recordings are read
+where prifly's host writes them, `<prifly data>/dictation-recordings/`
+(`pronounce/past-pieces.ts`).
+
 ## Your accent
 
 Vowels cannot be judged one word at a time, so they are measured over all your
@@ -303,5 +327,6 @@ memory and 4 cores, so run it deliberately, on a machine with room:
 | `pronounce/stress.ts`                                                                                       | Word stress: the sentence-scaled cues, the lead, the stress mark    |
 | `pronounce/scores.ts`, `profile.ts`, `native.ts`, `confirmed.ts`, `accent-words.ts`                         | The accent profile and its confirmed-pattern underlines             |
 | `pronounce/accent-panel.ts`, `panel/`                                                                       | The "Your accent" window: its data and its page                     |
+| `pronounce/flag-check.ts`, `flags.ts`, `scan-worker.ts`, `past-pieces.ts`, `resample.ts`, `personal.ts`     | Check your flags: the job, its flags, the reader's own cut-offs     |
 | `tools/calibrate/`                                                                                          | Measures natives and learners on a rented box (its `README.md`)     |
 | `test/`                                                                                                     | Tests over fakes                                                    |

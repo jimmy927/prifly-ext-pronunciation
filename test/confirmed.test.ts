@@ -64,6 +64,16 @@ test("no underline short of the cut-off, for another sound, for a word marked al
   expect(marksOf([much(-6)], confirmedCup(), null)).toEqual([]);
 });
 
+test("the reader's own cut-off from their marks moves where a vowel is underlined", () => {
+  const theirs = (scores: WordScores[], cut: number) =>
+    confirmedMarks(scores, ["much"], assess(confirmedCup(), stats, NOW), stats, new Set(), cut);
+  const looser = valueAt(curve, -2);
+  // Short of the natives' 0.5th percentile, past the reader's own -2.
+  expect(theirs([much(looser - 0.05)], -2)).toMatchObject([{ index: 0, word: "much" }]);
+  expect(marksOf([much(looser - 0.05)])).toEqual([]);
+  expect(theirs([much(CUT - 0.05)], -4)).toEqual([]);
+});
+
 test("no underline from a pattern that is not confirmed", () => {
   let few: Profile = { v: 1, pieces: [], features: {} };
   for (let k = 0; k < MIN_EXAMPLES - 1; k++) {

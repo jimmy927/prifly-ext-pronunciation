@@ -24,13 +24,37 @@
           Refresh
         </button>
       </header>
-      <p class="note" id="note">
-        Measured over many sentences, not word by word: one word can sound off by chance, a
-        pattern over many cannot.
-      </p>
-      <div id="body" aria-live="polite">
-        <p class="state" id="loading">Reading your profile…</p>
+      <div class="tabs" role="tablist" aria-label="Your accent">
+        <button type="button" role="tab" class="tab" id="tab-profile" aria-controls="profile-view" aria-selected="true">
+          Your profile
+        </button>
+        <button type="button" role="tab" class="tab" id="tab-flags" aria-controls="flags-view" aria-selected="false">
+          Check your flags
+        </button>
       </div>
+      <section id="profile-view" role="tabpanel" aria-labelledby="tab-profile">
+        <p class="note" id="note">
+          Measured over many sentences, not word by word: one word can sound off by chance, a
+          pattern over many cannot.
+        </p>
+        <div id="body" aria-live="polite">
+          <p class="state" id="loading">Reading your profile…</p>
+        </div>
+      </section>
+      <section id="flags-view" role="tabpanel" aria-labelledby="tab-flags" hidden>
+        <div class="job">
+          <div class="job-buttons">
+            <button type="button" class="btn primary" id="score" disabled>Score my last 200 sentences</button>
+            <button type="button" class="btn" id="cancel" disabled>Cancel</button>
+            <button type="button" class="btn quiet" id="reset" disabled title="Clear every Right and Wrong you marked">
+              Reset marks
+            </button>
+          </div>
+          <p class="job-line" id="job-line" aria-live="polite">Reading your flags…</p>
+          <div class="progress" id="progress" aria-hidden="true"><div class="progress-bar" id="progress-bar"></div></div>
+        </div>
+        <div id="flags-body"></div>
+      </section>
     </main>
     <script type="module" src="app.js"></script>
   </body>

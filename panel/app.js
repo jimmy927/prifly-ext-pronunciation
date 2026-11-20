@@ -1,7 +1,9 @@
 // The "Your accent" window: reads `api/profile` (pronounce/accent-panel.ts) and shows the
 // features that set the reader furthest from native speakers, with their own word ("Yours")
 // and it said right ("Say it right") to play. A button that cannot play is disabled with
-// the reason as its tooltip; none appears or disappears.
+// the reason as its tooltip; none appears or disappears. Its second tab, "Check your flags",
+// reads `api/flags` (pronounce/flag-check.ts): the reader scores their past sentences with
+// every check and marks each flag Right or Wrong.
 
 const body = document.getElementById("body");
 const heading = document.getElementById("heading");
@@ -39,8 +41,18 @@ function playButton(label, icon, why, play) {
 
 let current = null;
 
-async function api(path) {
-  const response = await fetch(`api/${path}`);
+/** `api/<path>`'s JSON; with `body`, a POST of it. Throws with the extension's error. */
+async function api(path, body) {
+  const response = await fetch(
+    `api/${path}`,
+    body === undefined
+      ? undefined
+      : {
+          method: "POST",
+          headers: { "content-type": "application/json" },
+          body: JSON.stringify(body),
+        },
+  );
   const answer = await response.json().catch(() => ({}));
   if (!response.ok) throw new Error(answer?.error ?? response.statusText);
   return answer;
@@ -95,11 +107,19 @@ function collectingLine(view) {
   return line;
 }
 
+/** The heading of the profile tab; the flags tab has its own. */
+let profileHeading = "Your accent";
+
+function setHeading(text) {
+  profileHeading = text;
+  if (tab === "profile") heading.textContent = text;
+}
+
 function show(view) {
   current = view;
   body.replaceChildren();
   if (view.sentences === 0) {
-    heading.textContent = "Your accent";
+    setHeading("Your accent");
     body.append(
       el(
         "p",
@@ -110,7 +130,7 @@ function show(view) {
     sayTargets();
     return;
   }
-  heading.textContent = `Your accent, from ${sentences(view.sentences)} in the last ${view.days} days`;
+  setHeading(`Your accent, from ${sentences(view.sentences)} in the last ${view.days} days`);
   if (!view.natives) {
     body.append(
       el(
@@ -153,7 +173,238 @@ async function load() {
   }
 }
 
-refreshButton.addEventListener("click", () => void load());
+// "Check your flags": the scoring job's buttons (always there, enabled by the job's state),
+// its line and progress, and every flag by check with Yours, Say it right, Right and Wrong.
+
+const flagsBody = document.getElementById("flags-body");
+const scoreButton = document.getElementById("score");
+const cancelButton = document.getElementById("cancel");
+const resetButton = document.getElementById("reset");
+const jobLine = document.getElementById("job-line");
+const progress = document.getElementById("progress");
+const progressBar = document.getElementById("progress-bar");
+const tabs = {
+  profile: {
+    button: document.getElementById("tab-profile"),
+    panel: document.getElementById("profile-view"),
+  },
+  flags: {
+    button: document.getElementById("tab-flags"),
+    panel: document.getElementById("flags-view"),
+  },
+};
+
+/** How often the page asks again while a job runs, ms. */
+const POLL_MS = 1500;
+const RESULT_CLASS = { on: "on", off: "off", few: "few" };
+
+let flagsView = null;
+let poll = null;
+/** The checks the reader folded: they stay folded when the list is drawn again. */
+const closedChecks = new Set();
+/** A mark or a play on its way: the buttons stay as they are until it answers. */
+let acting = false;
+
+/** The flag's row: its sentence with the word picked out, its score and sound, and its buttons. */
+function flagRow(flag, view, errorLine) {
+  const row = el("li", "flag-row");
+  row.append(el("span", "score", flag.score));
+  const sentence = el("p", "sentence");
+  sentence.append(flag.before, el("mark", "", flag.word), flag.after);
+  row.append(sentence);
+  const sound = el("p", "sound", flag.sound);
+  if (flag.fix !== "") sound.title = flag.fix;
+  row.append(sound);
+  const buttons = el("div", "row-buttons");
+  const yours = playButton("Yours", ICON_PLAY, view.yours, (button) =>
+    playFlag(flag, "yours", button, errorLine),
+  );
+  const right = playButton("Say it right", ICON_VOICE, view.sayRight, (button) =>
+    playFlag(flag, "right", button, errorLine),
+  );
+  buttons.append(
+    yours,
+    right,
+    verdictButton(flag, "right", "Right"),
+    verdictButton(flag, "wrong", "Wrong"),
+  );
+  row.append(buttons);
+  return row;
+}
+
+/** Right or Wrong: pressed when it is the reader's verdict; pressing it again takes the verdict back. */
+function verdictButton(flag, verdict, label) {
+  const button = el("button", `btn verdict ${verdict}`, label);
+  button.type = "button";
+  const pressed = flag.verdict === verdict;
+  button.setAttribute("aria-pressed", String(pressed));
+  button.title = pressed ? "Click again to take it back" : `This flag is ${verdict}`;
+  button.addEventListener(
+    "click",
+    () => void act("flags/mark", { id: flag.id, verdict: pressed ? null : verdict }),
+  );
+  return button;
+}
+
+async function playFlag(flag, which, button, errorLine) {
+  if (button.getAttribute("aria-busy") === "true") return;
+  button.setAttribute("aria-busy", "true");
+  errorLine.hidden = true;
+  try {
+    const { audio } = await api("flags/play", { id: flag.id, which });
+    await new Audio(audio).play();
+  } catch (caught) {
+    errorLine.textContent = caught instanceof Error ? caught.message : String(caught);
+    errorLine.hidden = false;
+  } finally {
+    button.removeAttribute("aria-busy");
+  }
+}
+
+function checkSection(check, view) {
+  const section = el("details", `check result-${RESULT_CLASS[check.result] ?? "few"}`);
+  section.open = !closedChecks.has(check.id);
+  section.dataset.check = check.id;
+  section.addEventListener("toggle", () => {
+    if (section.open) closedChecks.delete(check.id);
+    else closedChecks.add(check.id);
+  });
+  const summary = el("summary", "check-head");
+  summary.append(el("h2", "", check.title));
+  summary.append(
+    el(
+      "span",
+      `badge ${check.shipped ? "shipped-on" : "shipped-off"}`,
+      check.shipped ? "Ships on" : "Ships off",
+    ),
+  );
+  summary.append(
+    el(
+      "span",
+      "tally",
+      `${check.flags.length} flags · ${check.marked} marked · ${check.right} right`,
+    ),
+  );
+  section.append(summary);
+  section.append(el("p", "result", check.line));
+  const errorLine = el("p", "play-error");
+  errorLine.hidden = true;
+  if (check.flags.length === 0) {
+    section.append(el("p", "none", "No flags of this check in the sentences scored."));
+  } else {
+    const list = el("ol", "flag-rows");
+    for (const flag of check.flags) list.append(flagRow(flag, view, errorLine));
+    section.append(list);
+  }
+  section.append(errorLine);
+  return section;
+}
+
+/** The job's buttons, line and progress bar; whether it is running. */
+function showJob(view) {
+  scoreButton.disabled = acting || !view.canStart;
+  cancelButton.disabled = acting || !view.canCancel;
+  resetButton.disabled = acting || !view.canReset;
+  const { state, done, total, line } = view.job;
+  jobLine.textContent = line;
+  jobLine.className = `job-line${state === "failed" ? " error" : ""}`;
+  const running = state === "running" || state === "listing";
+  progress.classList.toggle("active", running);
+  progressBar.style.width = total > 0 ? `${Math.round((done / total) * 100)}%` : "0%";
+  return running;
+}
+
+/** What the list says with no flags in it; "" where the job's line says it all. */
+function noFlagsLine(state) {
+  if (state === "done" || state === "cancelled") return "No flags in the sentences scored.";
+  return state === "idle" ? "Nothing scored yet." : "";
+}
+
+function showFlags(view) {
+  flagsView = view;
+  const running = showJob(view);
+  const flagged = view.checks.some((check) => check.flags.length > 0);
+  flagsBody.replaceChildren();
+  if (flagged) {
+    for (const check of view.checks) flagsBody.append(checkSection(check, view));
+  } else if (noFlagsLine(view.job.state) !== "") {
+    flagsBody.append(el("p", "state", noFlagsLine(view.job.state)));
+  }
+  clearTimeout(poll);
+  poll = running && tab === "flags" ? setTimeout(() => void loadFlags(), POLL_MS) : null;
+  sayTargets();
+}
+
+function showFlagsError(message) {
+  flagsView = null;
+  jobLine.textContent = `Could not read your flags: ${message}`;
+  jobLine.className = "job-line error";
+  scoreButton.disabled = true;
+  cancelButton.disabled = true;
+  resetButton.disabled = true;
+  sayTargets();
+}
+
+async function loadFlags() {
+  if (flagsView === null) jobLine.textContent = "Reading your flags…";
+  try {
+    showFlags(await api("flags"));
+  } catch (caught) {
+    showFlagsError(caught instanceof Error ? caught.message : String(caught));
+  }
+}
+
+/** An action on the job or a flag; the view it answers with is shown, an error says itself on the job line. */
+async function act(path, body) {
+  if (acting) return;
+  acting = true;
+  scoreButton.disabled = cancelButton.disabled = resetButton.disabled = true;
+  try {
+    const view = await api(path, body);
+    acting = false;
+    showFlags(view);
+  } catch (caught) {
+    acting = false;
+    if (flagsView !== null) showFlags(flagsView);
+    jobLine.textContent = caught instanceof Error ? caught.message : String(caught);
+    jobLine.className = "job-line error";
+  }
+}
+
+scoreButton.addEventListener("click", () => void act("flags/start", {}));
+cancelButton.addEventListener("click", () => void act("flags/cancel", {}));
+resetButton.addEventListener("click", () => void act("flags/reset", {}));
+scoreButton.dataset.say = "score";
+cancelButton.dataset.say = "cancel";
+resetButton.dataset.say = "reset marks";
+
+const TAB_KEY = "accent-tab";
+let tab = "profile";
+
+function showTab(name) {
+  tab = name;
+  for (const [key, one] of Object.entries(tabs)) {
+    one.button.setAttribute("aria-selected", String(key === name));
+    one.panel.hidden = key !== name;
+  }
+  heading.textContent = name === "flags" ? "Check your flags" : profileHeading;
+  refreshButton.title = name === "flags" ? "Read your flags again" : "Read your profile again";
+  try {
+    localStorage.setItem(TAB_KEY, name);
+  } catch {
+    // No storage in this window: the tab is not remembered.
+  }
+  if (name === "flags") void loadFlags();
+  else clearTimeout(poll);
+  sayTargets();
+}
+
+tabs.profile.button.addEventListener("click", () => showTab("profile"));
+tabs.flags.button.addEventListener("click", () => showTab("flags"));
+tabs.profile.button.dataset.say = "profile";
+tabs.flags.button.dataset.say = "check flags";
+
+refreshButton.addEventListener("click", () => void (tab === "flags" ? loadFlags() : load()));
 refreshButton.dataset.say = "refresh";
 
 // Voice commands ("panel-voice"): the window asks for the names, and says one to click it.
@@ -203,3 +454,12 @@ addEventListener("message", (event) => {
 });
 
 void load();
+{
+  let kept = null;
+  try {
+    kept = localStorage.getItem(TAB_KEY);
+  } catch {
+    // No storage: the profile first.
+  }
+  if (kept === "flags") showTab("flags");
+}

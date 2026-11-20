@@ -222,12 +222,18 @@ function leadsOf(summary: Record<string, number | null>): NativeLeads {
 /**
  * The check from `thresholds.json`'s and `native-stats.json`'s JSON; null
  * (off) when the stress entry is missing or off, or no combination has both
- * a cut-off and the natives' leads. Throws on JSON of another shape.
+ * a cut-off and the natives' leads. With `evenOff`, an entry that is off is
+ * read too: the reader's own cut-off (`withStressOverride`) and the flags
+ * they mark (`flags.ts`) need its natives' leads. Throws on JSON of another shape.
  */
-export function parseStressCheck(thresholds: unknown, natives: unknown): StressCheck | null {
+export function parseStressCheck(
+  thresholds: unknown,
+  natives: unknown,
+  evenOff = false,
+): StressCheck | null {
   const entry = ThresholdsFile.parse(thresholds).contrasts[STRESS_ID];
   const leads = NativeFile.parse(natives).stress?.lead ?? {};
-  if (entry === undefined || entry.off) return null;
+  if (entry === undefined || (entry.off && !evenOff)) return null;
   const check: StressCheck = { cuts: {}, natives: {} };
   for (const combo of COMBOS) {
     const cut = entry.cuts?.[combo];
@@ -248,12 +254,13 @@ export function parseStressCheck(thresholds: unknown, natives: unknown): StressC
 export async function loadStressCheck(
   thresholdsPath: string = THRESHOLDS_PATH,
   statsPath: string = join(dirname(thresholdsPath), "native-stats.json"),
+  evenOff = false,
 ): Promise<StressCheck | null> {
   const thresholds = Bun.file(thresholdsPath);
   const natives = Bun.file(statsPath);
   if (!((await thresholds.exists()) && (await natives.exists()))) return null;
   try {
-    return parseStressCheck(await thresholds.json(), await natives.json());
+    return parseStressCheck(await thresholds.json(), await natives.json(), evenOff);
   } catch (caught) {
     const why = caught instanceof Error ? caught.message : String(caught);
     process.stderr.write(`pronounce: word stress off, ${thresholdsPath} or ${statsPath}: ${why}\n`);
@@ -325,6 +332,21 @@ function stressMark(
   };
 }
 
+/** The stress marks of a piece read as `read`, each with its lead, its words' cues from its 16 kHz `audio`. */
+export function stressFound(
+  read: ReadPiece,
+  words: readonly { word: string }[],
+  audio: Float32Array,
+  check: StressCheck,
+): { mark: Judged; lead: number }[] {
+  return stressReadings(stressWordsOf(read, audio)).flatMap((reading, index) => {
+    const word = words[index];
+    if (reading === null || word === undefined) return [];
+    const mark = stressMark(read, index, word.word, reading, check);
+    return mark === null ? [] : [{ mark, lead: reading.lead }];
+  });
+}
+
 /** The stress marks of a piece read as `read`, its words' cues from its 16 kHz `audio`. */
 export function stressMarks(
   read: ReadPiece,
@@ -332,10 +354,28 @@ export function stressMarks(
   audio: Float32Array,
   check: StressCheck,
 ): Judged[] {
-  return stressReadings(stressWordsOf(read, audio)).flatMap((reading, index) => {
-    const word = words[index];
-    if (reading === null || word === undefined) return [];
-    const mark = stressMark(read, index, word.word, reading, check);
-    return mark === null ? [] : [mark];
-  });
+  return stressFound(read, words, audio, check).map((one) => one.mark);
+}
+
+/**
+ * `check` with the reader's own cut-off over every combination's `maybe` (sure from the
+ * file's, or from theirs when higher); null when they turned it off. `all` is the check read
+ * even when the file has it off (`parseStressCheck`'s `evenOff`): with no override `shipped`
+ * stays as it is.
+ */
+export function withStressOverride(
+  shipped: StressCheck | null,
+  all: StressCheck | null,
+  override: { off: boolean; maybe: number } | undefined,
+): StressCheck | null {
+  if (override === undefined) return shipped;
+  if (override.off || all === null) return null;
+  const cuts: StressCheck["cuts"] = {};
+  for (const combo of COMBOS) {
+    const cut = all.cuts[combo];
+    if (cut !== undefined) {
+      cuts[combo] = { maybe: override.maybe, sure: Math.max(override.maybe, cut.sure) };
+    }
+  }
+  return { cuts, natives: all.natives };
 }

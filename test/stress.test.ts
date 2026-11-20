@@ -4,8 +4,9 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import type { Posteriors } from "../pronounce/ctc";
 import { parseDictionary } from "../pronounce/dictionary";
+import { scanFlags } from "../pronounce/flags";
 import type { StressCues } from "../pronounce/gop";
-import { judgeWords, SAMPLES_PER_FRAME, Vocab } from "../pronounce/judge";
+import { judgeWords, readPiece, SAMPLES_PER_FRAME, Vocab } from "../pronounce/judge";
 import {
   loadStressCheck,
   nativeShare,
@@ -13,8 +14,10 @@ import {
   type StressCheck,
   type StressReading,
   type StressWord,
+  stressFound,
   stressMarks,
   stressReadings,
+  withStressOverride,
 } from "../pronounce/stress";
 import { cutOf, parseThresholds } from "../pronounce/thresholds";
 import fixture from "./fixtures/stress-sentence.json";
@@ -142,6 +145,37 @@ test("a lead under the cut-off is no mark, one between maybe and sure is maybe",
   expect(judge(LEARNER, britfone, high)).toEqual([]);
   const middle: StressCheck = { ...CHECK, cuts: { "dur+rms+f0": { maybe: 0.5, sure: 60 } } };
   expect(judge(LEARNER, britfone, middle)).toMatchObject([{ level: "maybe" }]);
+});
+
+test("the reader's own cut-off replaces every combination's maybe; off is no check; none keeps the file's", () => {
+  const own = withStressOverride(null, CHECK, { off: false, maybe: 1.2 });
+  expect(own?.cuts).toEqual({
+    "dur+rms+f0": { maybe: 1.2, sure: 1.5 },
+    "dur+rms": { maybe: 1.2, sure: 1.5 },
+  });
+  expect(withStressOverride(CHECK, CHECK, { off: false, maybe: 2 })?.cuts["dur+rms"]).toEqual({
+    maybe: 2,
+    sure: 2,
+  });
+  expect(withStressOverride(CHECK, CHECK, { off: true, maybe: 1 })).toBeNull();
+  expect(withStressOverride(CHECK, CHECK, undefined)).toBe(CHECK);
+  expect(withStressOverride(null, CHECK, undefined)).toBeNull();
+  // The file has stress off: read anyway for the reader's own setting and the scan's flags.
+  const off = { contrasts: { stress: { off: true, cuts: THRESHOLDS.contrasts.stress.cuts } } };
+  expect(parseStressCheck(off, NATIVES, true)).toEqual(parseStressCheck(THRESHOLDS, NATIVES));
+});
+
+test("a scan flags the stress with its lead as the score, at the combination's maybe", () => {
+  const { post, audio } = developer(LEARNER);
+  const words = [{ word: "developer", from: 0, to: audio.length }];
+  const read = readPiece(post, vocab, britfone, words);
+  if (read === null) throw new Error("not aligned");
+  const [flag] = scanFlags(read, words, audio, CHECK);
+  const [found] = stressFound(read, words, audio, CHECK);
+  expect(flag).toMatchObject({ index: 0, check: "stress", sound: "stress second → first" });
+  expect(flag?.score).toBeCloseTo(found?.lead ?? 0, 3);
+  expect(flag?.score).toBeGreaterThan(0.8);
+  expect(scanFlags(read, words, audio, null)).toEqual([]);
 });
 
 test("a stress another accepted pronunciation has is no mark", () => {

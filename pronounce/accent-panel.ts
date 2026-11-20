@@ -8,6 +8,12 @@
  *   features still collecting.
  * - `play?feature=<key>&example=<id>&which=yours|right`: that example's word,
  *   the reader's own or said right, as a `data:` URL of the wav.
+ * - `flags`: "Check your flags" (`flag-check.ts`, `FlagsView`): the scoring
+ *   job, every flag by check with the reader's verdicts, and each check's
+ *   result for them. `flags/start`, `flags/cancel`, `flags/reset` and
+ *   `flags/mark` (`{ id, verdict: "right" | "wrong" | null }`) act first and
+ *   answer with the view; `flags/play` (`{ id, which: "yours" | "right" }`)
+ *   answers with the word's `data:` URL.
  *
  * A play button never disappears: what cannot play says why (`yours`,
  * `sayRight` hold the reason, null when it can), and the page disables it
@@ -17,6 +23,7 @@
 import type { PanelRequest } from "@prifly/extension-api";
 import { type FeatureKey, listed, parseKey, shortName, titleOf } from "./accent-words";
 import type { Coach, ExampleAudio } from "./coach";
+import type { FlagCheck } from "./flag-check";
 import { deviateOf, Z_P10 } from "./native";
 import {
   type AccentProfile,
@@ -61,8 +68,26 @@ export type PanelDeps = {
   coach: Pick<Coach, "yoursMissing" | "exampleYours" | "exampleRight">;
   /** Why "Say it right" cannot be made now; null when a voice box is set. */
   sayRight: () => string | null;
+  /** "Check your flags" (`flag-check.ts`); left out, its requests are refused. */
+  flags?: Pick<FlagCheck, "view" | "start" | "cancel" | "mark" | "reset" | "play">;
   readFile?: (path: string) => Promise<Uint8Array>;
 };
+
+/** A mark's verdict as the page sends it: "right", "wrong", or null (or "") to take it back. */
+function verdictOf(value: unknown): "right" | "wrong" | null {
+  if (value === "right" || value === "wrong") return value;
+  if (value === null || value === "") return null;
+  throw new Error(`Unknown verdict: ${String(value)}`);
+}
+
+/** A request's arguments: its query, and a POST's JSON object over it. */
+function argsOf(request: PanelRequest): Record<string, unknown> {
+  const body = request.body;
+  return {
+    ...request.query,
+    ...(typeof body === "object" && body !== null && !Array.isArray(body) ? body : {}),
+  };
+}
 
 /** "9 in 10", "19 in 20", "99 in 100": how many native ones are closer to native than the reader's usual one. */
 export function shareWords(nativeBetter: number): string {
@@ -93,7 +118,39 @@ export class AccentPanel {
   async handle(request: PanelRequest): Promise<unknown> {
     if (request.path === "profile") return this.view();
     if (request.path === "play") return this.play(request.query);
+    if (request.path === "flags" || request.path.startsWith("flags/")) {
+      return this.flags(request.path, argsOf(request));
+    }
     throw new Error(`Unknown request: ${request.path}`);
+  }
+
+  /** "Check your flags": its view, after the action the path names. */
+  private async flags(path: string, args: Record<string, unknown>): Promise<unknown> {
+    const flags = this.deps.flags;
+    if (flags === undefined) throw new Error("Check your flags is not available");
+    const id = typeof args["id"] === "string" ? args["id"] : "";
+    if (path === "flags/play") {
+      const which = args["which"];
+      if (which !== "yours" && which !== "right") throw new Error(`Unknown play: ${String(which)}`);
+      return { audio: await this.dataUrl(await flags.play(id, which)) };
+    }
+    const actions: Record<string, () => void | Promise<void>> = {
+      flags: () => undefined,
+      "flags/start": () => flags.start(),
+      "flags/cancel": () => flags.cancel(),
+      "flags/reset": () => flags.reset(),
+      "flags/mark": () => flags.mark(id, verdictOf(args["verdict"])),
+    };
+    const action = actions[path];
+    if (action === undefined) throw new Error(`Unknown request: ${path}`);
+    await action();
+    return flags.view();
+  }
+
+  private async dataUrl(path: string): Promise<string> {
+    const read = this.deps.readFile ?? (async (file: string) => Bun.file(file).bytes());
+    const bytes = await read(path);
+    return `data:audio/wav;base64,${Buffer.from(bytes).toString("base64")}`;
   }
 
   /** The profile as the page shows it. */
@@ -153,9 +210,7 @@ export class AccentPanel {
       which === "yours"
         ? await this.deps.coach.exampleYours(audioOf(example))
         : await this.deps.coach.exampleRight(audioOf(example));
-    const read = this.deps.readFile ?? (async (file: string) => Bun.file(file).bytes());
-    const bytes = await read(path);
-    return { audio: `data:audio/wav;base64,${Buffer.from(bytes).toString("base64")}` };
+    return { audio: await this.dataUrl(path) };
   }
 }
 
