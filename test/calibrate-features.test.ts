@@ -81,7 +81,14 @@ test("each word gets its pronunciation, phones' goodness, vowels' cues and the c
   expect(need.phones[2]?.lpr).toBeLessThan(0);
   expect(need.phones[0]?.lpr).toBeGreaterThan(0);
   expect(need.vowels).toEqual([
-    expect.objectContaining({ at: 1, phone: "iː", stressed: true, durationMs: 120 }),
+    expect.objectContaining({
+      at: 1,
+      phone: "iː",
+      stressed: true,
+      from: 3,
+      to: 9,
+      durationMs: 120,
+    }),
   ]);
   expect(Math.abs((need.vowels[0]?.f0Hz ?? 0) - 200)).toBeLessThan(5);
   expect(need.candidates).toContainEqual(
@@ -91,6 +98,18 @@ test("each word gets its pronunciation, phones' goodness, vowels' cues and the c
   // Only CMUdict knows kat: aligned, not judged.
   expect(kat).toMatchObject({ known: true, judged: false, variantSource: "cmudict" });
   expect(JSON.parse(JSON.stringify(need))).toEqual(need);
+});
+
+test("a vowel the model spikes on for one frame is as long as the stretch it owns", () => {
+  // CTC is peaky: n, iː and d one frame each, blanks between.
+  const post = framesOf([{ n: 0.95 }, 1], [{}, 1], [{ iː: 0.95 }, 1], [{}, 7], [{ d: 0.95 }, 1]);
+  const audio = toneOver(post.frames, 0, 11);
+  const records = utteranceRecords("u3", "need", audio, post, vocab, dictionary);
+  if (!Array.isArray(records)) throw new Error(records.error);
+  expect(records[0]?.phones.map((phone) => phone.to - phone.from)).toEqual([1, 1, 1]);
+  expect(records[0]?.vowels).toEqual([
+    expect.objectContaining({ phone: "iː", from: 1.5, to: 6.5, durationMs: 100 }),
+  ]);
 });
 
 test("an utterance too short for its words is one error line", () => {

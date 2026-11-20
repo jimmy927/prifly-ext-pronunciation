@@ -2,8 +2,9 @@
  * Word stress: whether a word of two or more syllables was said with another
  * syllable stressed than the dictionary's ("DEV-eloper" for "de-VEL-oper").
  *
- * Each vowel of the sentence has three cues (`gop.ts`'s `stressCues`): its
- * length, its loudness and its pitch. They are put on one scale by the
+ * Each vowel of the sentence has three cues (`gop.ts`'s `stressCues`, over
+ * the stretch the vowel owns, `ownedSpans`): its length, its loudness and
+ * its pitch. They are put on one scale by the
  * sentence itself: length as a log, pitch in semitones, and each cue as how
  * many of the sentence's standard deviations it lies from the sentence's mean
  * over every vowel of every aligned word (`sentenceScale`). A slow, loud or
@@ -33,7 +34,7 @@
 import { dirname, join } from "node:path";
 import { z } from "zod";
 import { stressOf } from "./dictionary";
-import { type StressCues, stressCues } from "./gop";
+import { ownedSpans, type StressCues, stressCues } from "./gop";
 import { chosenOf, type Judged, type ReadPiece } from "./judge";
 import { isVowel } from "./phones";
 import { respell } from "./respell";
@@ -160,13 +161,14 @@ export function acceptedStresses(
 
 /** The piece's words for `stressReadings`: each aligned word's vowels with their cues from the 16 kHz `audio`. */
 export function stressWordsOf(read: ReadPiece, audio: Float32Array): StressWord[] {
+  const owned = ownedSpans(read.alignment.words, read.post.frames);
   return read.entries.map((entry, index): StressWord => {
     const chosen = chosenOf(read, index);
     if (chosen === null) return { vowels: [], stressed: -1, accepts: [] };
     const vowelAt = vowelsOf(chosen.said);
     const vowels = vowelAt.flatMap((at) => {
-      const phone = chosen.word.phones[at];
-      return phone === undefined ? [] : [stressCues(audio, phone)];
+      const span = owned[index]?.[at];
+      return span === undefined ? [] : [stressCues(audio, span)];
     });
     const stressed = entry.judged ? vowelAt.indexOf(stressOf(chosen.said)) : -1;
     return {

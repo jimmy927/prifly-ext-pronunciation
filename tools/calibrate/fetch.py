@@ -8,15 +8,18 @@ Each corpus ends up as WORK/corpora/<name>/ with
 
 Natives: LibriSpeech dev-clean and test-clean (openslr 12, CC BY 4.0) and a
 British/Irish subset of VCTK 0.92 (Edinburgh DataShare, CC BY 4.0). Learners:
-speechocean762 (openslr 101, CC BY 4.0, Mandarin speakers, per-phone scores)
-and, from a local copy only, L2-ARCTIC (its annotation TextGrids give the
-perceived phone). Downloads come only from openslr.org and datashare.ed.ac.uk
-and resume where they stopped; nothing is uploaded anywhere.
+speechocean762 (openslr 101, CC BY 4.0, Mandarin speakers, per-phone scores;
+its scores.json from the corpus's GitHub repository, pinned, which adds the
+phone heard instead) and, from a local copy only, L2-ARCTIC (its annotation
+TextGrids give the perceived phone). Downloads come only from openslr.org,
+datashare.ed.ac.uk and raw.githubusercontent.com and resume where they
+stopped; nothing is uploaded anywhere.
 """
 
 from __future__ import annotations
 
 import argparse
+import hashlib
 import io
 import json
 import re
@@ -35,6 +38,14 @@ LIBRISPEECH = {
     "test-clean": "https://www.openslr.org/resources/12/test-clean.tar.gz",
 }
 SPEECHOCEAN = "https://www.openslr.org/resources/101/speechocean762.tar.gz"
+# openslr's archive has the scores but not what a phone was heard as instead; the corpus's own
+# repository added that later ("mispronunciations", for phones scored under 0.5) to the same
+# scores.json, the scores otherwise unchanged. Pinned to a commit and checked by its hash.
+SPEECHOCEAN_COMMIT = "613968e3b0b789fc33936fb5eba1973176ba7d11"
+SPEECHOCEAN_SCORES = f"https://raw.githubusercontent.com/jimbozhang/speechocean762/{SPEECHOCEAN_COMMIT}/resource/scores.json"
+SPEECHOCEAN_SCORES_SHA256 = "31c847b8ee29d61d8fe338bcbb1d4c4721425f05481d2144ad57cd19ea1159f8"
+# Written into each speechocean762 labels row: rows without it came from openslr's scores, with no perceived phones.
+SPEECHOCEAN_LABELS = f"speechocean762@{SPEECHOCEAN_COMMIT[:7]}"
 VCTK = "https://datashare.ed.ac.uk/bitstream/handle/10283/3443/VCTK-Corpus-0.92.zip"
 # VCTK speakers whose accent is from Britain or Ireland.
 VCTK_ACCENTS = {"English", "Scottish", "Irish", "NorthernIrish", "Welsh"}
@@ -265,21 +276,47 @@ def fetch_vctk(work: Path, max_hours: float) -> None:
     corpus.finish(f"VCTK 0.92 mic1, accents {sorted(VCTK_ACCENTS)}")
 
 
+def speechocean_heard(pronounced: str | None, canonical: str | None) -> tuple[str | None, bool]:
+    """A speechocean762 "pronounced-phone" as (perceived, deleted).
+
+    "S" is s; "S*" ("mostly like S, but not exactly") is taken as s too; "IH R" is two
+    phones, written "ɪ ɹ"; "<DEL>" is deleted; "<unk>" (not recognisable) and the
+    canonical phone itself (a distorted one, "R*" for R) give no perceived phone.
+    """
+    if not pronounced or pronounced.strip() == "<unk>":
+        return None, False
+    if pronounced.strip() == "<DEL>":
+        return None, True
+    parts = [arpabet_to_ipa(part) for part in pronounced.split()]
+    if not parts or any(part is None for part in parts):
+        return None, False
+    heard = " ".join(parts)
+    return (None if heard == canonical else heard), False
+
+
 def speechocean_labels(utt: str, entry: dict) -> dict:
     """speechocean762's scores of one utterance in the shared labels format (`labels.py`)."""
     words = []
     for word in entry.get("words", []):
-        wrong = {item.get("index"): item.get("pronounced-phone") for item in word.get("mispronunciations", [])}
+        canon = word.get("phones", [])
+        if isinstance(canon, str):
+            canon = canon.split()
+        # "index" counts from 0 in the word's phones; one naming another phone than is there is left out.
+        wrong = {
+            item.get("index"): item.get("pronounced-phone")
+            for item in word.get("mispronunciations", [])
+            if isinstance(item.get("index"), int)
+            and item["index"] < len(canon)
+            and re.sub(r"\d", "", canon[item["index"]]).upper() == str(item.get("canonical-phone", "")).upper()
+        }
         phones = []
-        for at, (phone, score) in enumerate(zip(word.get("phones", []), word.get("phones-accuracy", []))):
-            perceived = wrong.get(at)
-            phones.append(
-                {
-                    "canonical": arpabet_to_ipa(phone),
-                    "perceived": arpabet_to_ipa(perceived) if perceived else None,
-                    "score": score,
-                }
-            )
+        for at, (phone, score) in enumerate(zip(canon, word.get("phones-accuracy", []))):
+            canonical = arpabet_to_ipa(phone)
+            perceived, deleted = speechocean_heard(wrong.get(at), canonical)
+            row = {"canonical": canonical, "perceived": perceived, "score": score}
+            if deleted:
+                row["deleted"] = True
+            phones.append(row)
         words.append(
             {
                 "text": word.get("text", ""),
@@ -288,36 +325,64 @@ def speechocean_labels(utt: str, entry: dict) -> dict:
                 "phones": phones,
             }
         )
-    return {"utt": utt, "corpus": "speechocean762", "words": words}
+    return {"utt": utt, "corpus": "speechocean762", "labels": SPEECHOCEAN_LABELS, "words": words}
+
+
+def speechocean_scores(work: Path) -> dict:
+    """The pinned scores.json with the "mispronunciations" blocks, checked against its hash."""
+    path = download(SPEECHOCEAN_SCORES, work / "raw" / f"speechocean762-scores-{SPEECHOCEAN_COMMIT[:7]}.json")
+    data = path.read_bytes()
+    if hashlib.sha256(data).hexdigest() != SPEECHOCEAN_SCORES_SHA256:
+        path.unlink()
+        raise RuntimeError(f"speechocean762: {SPEECHOCEAN_SCORES} is not the file pinned (sha256 differs); removed it")
+    return json.loads(data.decode("utf-8"))
+
+
+def speechocean_labels_current(corpus: Corpus) -> bool:
+    """Whether the corpus's labels.jsonl came from the pinned scores (else it has no perceived phones)."""
+    path = corpus.folder / "labels.jsonl"
+    if not path.exists():
+        return False
+    with open(path, encoding="utf-8") as lines:
+        first = next((line for line in lines if line.strip()), None)
+    return first is not None and json.loads(first).get("labels") == SPEECHOCEAN_LABELS
+
+
+def relabel_speechocean(corpus: Corpus, scores: dict) -> None:
+    """A finished fetch's labels.jsonl written again from `scores`, for the utterances in its utts.tsv; the wavs stay."""
+    rows = [line.split("\t", 1)[0] for line in (corpus.folder / "utts.tsv").read_text(encoding="utf-8").splitlines() if line]
+    ids = {utt: utt[len("so-") :] if utt.startswith("so-") else utt for utt in rows}
+    labels = [speechocean_labels(utt, scores[ids[utt]]) for utt in rows if ids[utt] in scores]
+    with open(corpus.folder / "labels.jsonl", "w", encoding="utf-8") as out:
+        out.writelines(json.dumps(row, ensure_ascii=False) + "\n" for row in labels)
+    log(f"speechocean762: labels.jsonl written again from {SPEECHOCEAN_SCORES} ({len(labels)} utterances)")
 
 
 def fetch_speechocean(work: Path) -> None:
     corpus = Corpus(work, "speechocean762")
     if corpus.done:
+        if not speechocean_labels_current(corpus):
+            relabel_speechocean(corpus, speechocean_scores(work))
         return
+    scores = speechocean_scores(work)
     archive = download(SPEECHOCEAN, work / "raw" / "speechocean762.tar.gz")
-    scores: dict = {}
     seen: list[str] = []
     with tarfile.open(archive, "r:gz") as tar:
         for member in tar:
             name = member.name
-            if name.endswith("resource/scores.json"):
-                scores = json.loads(tar.extractfile(member).read().decode("utf-8"))
-            elif name.upper().endswith(".WAV") and "/WAVE/" in name.upper():
+            if name.upper().endswith(".WAV") and "/WAVE/" in name.upper():
                 utt = f"so-{Path(name).stem}"
                 path = corpus.wav / f"{utt}.wav"
                 if not path.exists():
                     corpus.seconds += write_wav(path, tar.extractfile(member).read())
                 seen.append(utt)
-    if not scores:
-        raise RuntimeError("speechocean762: no resource/scores.json in the archive")
     for utt in seen:
         entry = scores.get(utt.removeprefix("so-"))
         if entry is None:
             continue
         corpus.rows.append((utt, entry["text"]))
         corpus.labels.append(speechocean_labels(utt, entry))
-    corpus.finish("openslr 101")
+    corpus.finish(f"openslr 101, scores from {SPEECHOCEAN_SCORES}")
 
 
 def textgrid_tiers(text: str) -> dict[str, list[tuple[float, float, str]]]:

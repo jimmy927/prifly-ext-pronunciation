@@ -11,10 +11,17 @@ before it was kept have none either.
 
 `canonical` and `perceived` are in the extension's espeak IPA (the same table as
 pronounce/dictionary.ts's ARPABET); `perceived` is null when the raters did not
-say what was heard instead (or it was the canonical phone). `score` is
-speechocean762's per-phone accuracy (2 right, 1 accented, 0 wrong; averaged
-over raters where it says so); L2-ARCTIC's annotated errors get 0 and its
-other phones 2.
+say what was heard instead (or it was the canonical phone), and two phones
+heard for one are written with a space ("ɪ ɹ"); `deleted` is true for a phone
+left out. `score` is speechocean762's per-phone accuracy (0 to 2: 2 right,
+1 accented, 0 wrong or missed; the mean over its five raters); L2-ARCTIC's
+annotated errors get 0 and its other phones 2.
+
+speechocean762 says what was heard only for phones scored under 0.5 (its
+"mispronunciations" blocks, which openslr's archive lacks: fetch.py takes
+scores.json from the corpus's repository, pinned). Its rows carry
+`"labels": "speechocean762@<commit>"`; a labels.jsonl without that came from
+the archive and has no perceived phones, so fetch.py writes it again.
 """
 
 from __future__ import annotations

@@ -104,6 +104,42 @@ class Labels(unittest.TestCase):
         self.assertIsNone(phones[0]["perceived"])
         entry["words"][0]["stress"] = 5
         self.assertEqual(fetch.speechocean_labels("so-1", entry)["words"][0]["stress"], 5)
+        self.assertEqual(fetch.speechocean_labels("so-1", entry)["labels"], fetch.SPEECHOCEAN_LABELS)
+
+    def test_speechocean_heard_phones(self):
+        # "index" counts from 0; canonical-phone has no stress digit.
+        entry = {"text": "X", "words": [{"text": "X", "phones": ["AH0", "R", "Z", "D", "T", "L"],
+                                         "phones-accuracy": [0, 0.4, 0.4, 0, 0, 0],
+                                         "mispronunciations": [
+                                             {"canonical-phone": "AH", "index": 0, "pronounced-phone": "IH R"},
+                                             {"canonical-phone": "R", "index": 1, "pronounced-phone": "R*"},
+                                             {"canonical-phone": "Z", "index": 2, "pronounced-phone": "S*"},
+                                             {"canonical-phone": "D", "index": 3, "pronounced-phone": "<DEL>"},
+                                             {"canonical-phone": "T", "index": 4, "pronounced-phone": "<unk>"},
+                                             {"canonical-phone": "N", "index": 5, "pronounced-phone": "M"}]}]}  # fmt: skip
+        phones = fetch.speechocean_labels("so-2", entry)["words"][0]["phones"]
+        self.assertEqual([p["canonical"] for p in phones], ["ə", "ɹ", "z", "d", "t", "l"])
+        # Two phones for one; a distorted R is still R; "mostly like S" is s; left out; not recognisable;
+        # a block naming another phone than is at its index is not trusted.
+        self.assertEqual([p["perceived"] for p in phones], ["ɪ ɹ", None, "s", None, None, None])
+        self.assertEqual([p.get("deleted", False) for p in phones], [False, False, False, True, False, False])
+
+    def test_speechocean_relabels_a_finished_fetch(self):
+        with tempfile.TemporaryDirectory() as folder:
+            work = Path(folder)
+            corpus = fetch.Corpus(work, "speechocean762")
+            corpus.folder.mkdir(parents=True)
+            (corpus.folder / ".done").write_text("{}")
+            (corpus.folder / "utts.tsv").write_text("so-000010011\tIS\n")
+            old = {"utt": "so-000010011", "corpus": "speechocean762", "words": [{"text": "IS", "phones": []}]}
+            (corpus.folder / "labels.jsonl").write_text(json.dumps(old) + "\n")
+            self.assertFalse(fetch.speechocean_labels_current(corpus))
+            scores = {"000010011": {"text": "IS", "words": [{"text": "IS", "phones": ["IH0", "Z"], "phones-accuracy": [2, 0],
+                                                             "mispronunciations": [{"canonical-phone": "Z", "index": 1, "pronounced-phone": "S"}]}]}}  # fmt: skip
+            fetch.relabel_speechocean(corpus, scores)
+            self.assertTrue(fetch.speechocean_labels_current(corpus))
+            row = json.loads((corpus.folder / "labels.jsonl").read_text())
+            self.assertEqual(row["words"][0]["phones"][1]["perceived"], "s")
 
     def test_vctk_speakers(self):
         info = "ID  AGE  GENDER  ACCENTS  REGION COMMENTS\np225  23  F    English    Southern  England\np226 22 M American Ohio\n"
@@ -113,8 +149,51 @@ class Labels(unittest.TestCase):
 class Stats(unittest.TestCase):
     def test_label_phone_takes_the_same_occurrence(self):
         phones = [{"canonical": c} for c in ["s", "ɪ", "s", "t"]]
-        self.assertIs(stats.label_phone(["s", "ɪ", "s", "t"], 2, False, phones), phones[2])
-        self.assertIsNone(stats.label_phone(["z"], 0, False, phones))
+        self.assertIs(stats.label_phone(["s", "ɪ", "s", "t"], 2, phones), phones[2])
+        self.assertIsNone(stats.label_phone(["z"], 0, phones))
+
+    def test_label_phone_lines_up_another_pronunciation(self):
+        # Britfone's "clothes" has a ð the raters' (CMUdict's other one) has not: the z is their 4th phone, our 5th.
+        phones = [{"canonical": c} for c in ["k", "l", "oʊ", "z"]]
+        self.assertIs(stats.label_phone(["k", "l", "əʊ", "ð", "z"], 4, phones), phones[3])
+        self.assertIsNone(stats.label_phone(["k", "l", "əʊ", "ð", "z"], 3, phones))
+        # One z more in ours, before theirs: the z lined up is the last one, not the first by rank.
+        phones = [{"canonical": c} for c in ["ɪ", "z"]]
+        self.assertIs(stats.label_phone(["z", "ɪ", "z"], 2, phones), phones[1])
+        self.assertIsNone(stats.label_phone(["z", "ɪ", "z"], 0, phones))
+        # Spelling apart, the same phone: r and ɹ, a length mark.
+        self.assertEqual(stats.align_phones(["r", "iː"], ["ɹ", "i"]), {0: 0, 1: 1})
+
+    def test_a_speechocean_swap_counts_as_strict(self):
+        # As scores.json (the pinned one) has it: CHEESE, Z heard as S, IY as "IH R".
+        entry = {"text": "CHEESE", "words": [{
+            "text": "CHEESE", "accuracy": 3, "stress": 10, "phones": ["CH", "IY0", "Z"], "phones-accuracy": [2, 0.4, 0.4],
+            "mispronunciations": [{"canonical-phone": "IY", "index": 1, "pronounced-phone": "IH R"},
+                                  {"canonical-phone": "Z", "index": 2, "pronounced-phone": "S"}]}]}  # fmt: skip
+        labels = fetch.speechocean_labels("so-1", entry)
+        # Britfone's "cheese", as dump.ts writes it: the final z heard as s.
+        records = [{**word(0, "cheese", "tʃ iː z", [candidate(2, "z", "s", "z-s", 0.9, last=True),
+                                                     candidate(2, "z", "s", "final-devoicing", 0.9, last=True)]), "utt": "so-1"}]  # fmt: skip
+        tally = stats.Tally()
+        tally.learners("speechocean762", records, labels)
+        for check in ("z-s", "final-devoicing"):
+            numbers = stats.learner_numbers(tally.learner[check], 0.5)
+            self.assertEqual((numbers["matched"], numbers["precision"], numbers["strict"], numbers["recall"]), (1, 1.0, 1.0, 1.0))
+        # Heard as another phone than flagged: right (scored under 1.5), not strict.
+        records[0]["candidates"] = [candidate(2, "z", "ʃ", "z-s", 0.9, last=True)]
+        tally = stats.Tally()
+        tally.learners("speechocean762", records, labels)
+        numbers = stats.learner_numbers(tally.learner["z-s"], 0.5)
+        self.assertEqual((numbers["precision"], numbers["strict"]), (1.0, 0.0))
+
+    def test_stale_dump_lengths_are_said(self):
+        tally = stats.Tally()
+        old = {k: v for k, v in vowel(20, -20, None).items() if k not in ("from", "to")}
+        tally.native([{**word(0, "of", None, [], judged=False), "vowels": [old]}])
+        self.assertTrue(stats.stale_lengths(tally))
+        tally = stats.Tally()
+        tally.native([{**word(0, "of", None, [], judged=False), "vowels": [vowel(80, -20, None)]}])
+        self.assertFalse(stats.stale_lengths(tally))
 
     def test_words_matched_across_punctuation(self):
         records = [word(0, "author", "", []), word(1, "of", "", [])]
@@ -148,7 +227,7 @@ FIXTURE = Path(__file__).resolve().parents[2] / "test" / "fixtures" / "stress-se
 
 
 def vowel(ms, db, hz, at=0, stressed=False):
-    return {"at": at, "phone": "ə", "stressed": stressed, "durationMs": ms, "rmsDb": db, "f0Hz": hz}
+    return {"at": at, "phone": "ə", "stressed": stressed, "from": 0, "to": ms / 20, "durationMs": ms, "rmsDb": db, "f0Hz": hz}
 
 
 def stress_utterance(utt, reversed_stress):

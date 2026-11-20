@@ -175,16 +175,58 @@ def match_words(records: list[dict], labelled: list[dict]) -> dict[int, dict]:
     return matched
 
 
-def label_phone(variant: list[str], at: int, last: bool, phones: list[dict]) -> dict | None:
-    """The labelled phone for phone `at` of our pronunciation: the same occurrence of the same phone."""
-    expected = variant[at]
-    rank = [k for k, phone in enumerate(variant) if phone == expected].index(at)
-    same = [phone for phone in phones if phone.get("canonical") == expected]
-    if rank < len(same):
-        return same[rank]
-    if last and phones and phones[-1].get("canonical") == expected:
-        return phones[-1]
-    return None
+# pronounce/phones.ts's isVowel.
+VOWEL = re.compile(r"[aeiouyæɑɒɔəɛɜɪʊʌɐɚᵻøœɨʉɵɤɯ]")
+
+
+def phone_key(phone: str | None) -> str:
+    """A phone as either side may write it: no length mark, "ɹ" for r, "ɡ" for g."""
+    bare = (phone or "").replace("ː", "")
+    return {"r": "ɹ", "g": "ɡ"}.get(bare, bare)
+
+
+def align_phones(ours: list[str], theirs: list[str]) -> dict[int, int]:
+    """Our phone index -> the labelled phone's, the two pronunciations lined up with the fewest edits.
+
+    The chosen pronunciation need not be the raters' (another dictionary, a phone more or
+    less), so phones are matched by place, not by index. A vowel never stands for a consonant.
+    """
+
+    def cost(a: str, b: str) -> int:
+        if phone_key(a) == phone_key(b):
+            return 0
+        return 1 if bool(VOWEL.search(a)) == bool(VOWEL.search(b)) else 3
+
+    n, m = len(ours), len(theirs)
+    table = [[0] * (m + 1) for _ in range(n + 1)]
+    for i in range(n + 1):
+        for j in range(m + 1):
+            if i == 0 or j == 0:
+                table[i][j] = i + j
+            else:
+                table[i][j] = min(
+                    table[i - 1][j - 1] + cost(ours[i - 1], theirs[j - 1]), table[i - 1][j] + 1, table[i][j - 1] + 1
+                )
+    pairs: dict[int, int] = {}
+    i, j = n, m
+    while i > 0 and j > 0:
+        if table[i][j] == table[i - 1][j - 1] + cost(ours[i - 1], theirs[j - 1]):
+            pairs[i - 1] = j - 1
+            i, j = i - 1, j - 1
+        elif table[i][j] == table[i - 1][j] + 1:
+            i -= 1
+        else:
+            j -= 1
+    return pairs
+
+
+def label_phone(variant: list[str], at: int, phones: list[dict]) -> dict | None:
+    """The labelled phone for phone `at` of our pronunciation: the one lined up with it, when it is the same phone."""
+    theirs = [phone.get("canonical") or "" for phone in phones]
+    j = align_phones(variant, theirs).get(at)
+    if j is None or phone_key(theirs[j]) != phone_key(variant[at]):
+        return None
+    return phones[j]
 
 
 class Tally:
@@ -205,8 +247,15 @@ class Tally:
         # the raters' stress score or None).
         self.stress_native: list[tuple] = []
         self.stress_learner: list[tuple] = []
+        # Vowels of a dump from before dump.ts measured them over the stretch they own (no "from"):
+        # their length is the aligned frames', 20 ms nearly always.
+        self.unspanned = 0
+
+    def count_unspanned(self, records: list[dict]) -> None:
+        self.unspanned += sum(1 for record in records for vowel in record["vowels"] if "from" not in vowel)
 
     def native(self, records: list[dict]) -> None:
+        self.count_unspanned(records)
         for reading in record_readings(records):
             if reading is not None:
                 self.stress_native.append((reading["combo"], reading["lead"], reading["accepted"]))
@@ -248,6 +297,7 @@ class Tally:
             self.wins["highest"].append(int(stressed["f0Hz"] > max(pitched)))
 
     def learners(self, corpus: str, records: list[dict], labels: dict | None) -> None:
+        self.count_unspanned(records)
         matched = match_words(records, labels["words"]) if labels else {}
         for record, reading in zip(records, record_readings(records)):
             if reading is not None:
@@ -259,8 +309,9 @@ class Tally:
             variant = record["variant"].split(" ")
             word = matched.get(record["i"])
             for candidate in record["candidates"]:
-                phone = None if word is None else label_phone(variant, candidate["at"], candidate["last"], word["phones"])
-                heard_right = phone is not None and phone.get("perceived") == candidate["heard"]
+                phone = None if word is None else label_phone(variant, candidate["at"], word["phones"])
+                perceived = None if phone is None else phone.get("perceived")
+                heard_right = perceived is not None and phone_key(perceived) == phone_key(candidate["heard"])
                 self.learner[candidate["id"]].append(
                     (corpus, candidate["posterior"], eligible(candidate), phone is not None,
                      phone is not None and is_error(phone), heard_right)
@@ -453,6 +504,16 @@ def fmt(value, digits: int = 3) -> str:
     return str(value)
 
 
+STALE_LENGTHS = (
+    "This dump's vowel lengths, loudness and pitch are over the aligned frames only (dump.ts before owned "
+    "stretches): lengths are nearly all 20 ms and word stress's numbers mean little. Run the dump step again."
+)
+
+
+def stale_lengths(tally: Tally) -> bool:
+    return tally.unspanned > 0
+
+
 def report(tally: Tally, decided: dict, stress: dict, args) -> str:
     lines = [
         "# Calibration report",
@@ -474,8 +535,10 @@ def report(tally: Tally, decided: dict, stress: dict, args) -> str:
         f"Native false-alarm budget: {args.fa_rate:.4f} per judged word for maybe, "
         f"{args.sure_fa_rate:.4f} for sure; ship bar: precision ≥ {args.min_precision:.2f} on at least "
         f"{args.min_flags} labelled learner flags. A learner flag is right when the raters scored that phone "
-        f"under {ERROR_SCORE} (speechocean762) or annotated it as an error (L2-ARCTIC); strict also needs "
-        "the perceived phone to be the one flagged. Recall counts the labelled swaps of that kind found.",
+        f"under {ERROR_SCORE} (speechocean762, 0 to 2 per phone) or annotated it as an error (L2-ARCTIC); strict "
+        "also needs the perceived phone to be the one flagged (speechocean762 names it only for phones scored "
+        "under 0.5, so strict sits well under precision there). The flagged phone is looked up by lining up our "
+        "pronunciation with the raters' phones. Recall counts the labelled swaps of that kind found.",
         "",
         "| check | native flags/word at 0.70 | maybe | native rate at maybe | sure | learner flags | labelled | "
         "precision | strict | recall | ships |",
@@ -509,6 +572,8 @@ def report(tally: Tally, decided: dict, stress: dict, args) -> str:
         s = summary(tally.phone_lpr[phone])
         lines.append(f"| {phone} | {s['n']} | {fmt(s['p1'])} | {fmt(s['p5'])} | {fmt(s['p10'])} | {fmt(s['p50'])} | {fmt(s['p90'])} |")
     lines += ["", "## Native vowels", ""]
+    if stale_lengths(tally):
+        lines += [f"**{STALE_LENGTHS}**", ""]
     lines += ["| vowel | n | LPR p5 | LPR p50 | ms p10 | ms p50 | ms p90 |", "|---|---|---|---|---|---|---|"]
     for vowel in sorted(tally.vowel_ms):
         lpr, ms = summary(tally.vowel_lpr[vowel]), summary(tally.vowel_ms[vowel])
@@ -620,6 +685,14 @@ def main(argv: list[str] | None = None) -> None:
             tally.learners(corpus, records, labels.get(utt))
     if tally.native_judged == 0:
         sys.exit("stats: no native words in the dump; nothing to calibrate against")
+    if stale_lengths(tally):
+        print(f"stats: warning: {STALE_LENGTHS}", file=sys.stderr)
+    if any(row.get("corpus") == "speechocean762" and "labels" not in row for row in labels.values()):
+        print(
+            "stats: warning: speechocean762's labels.jsonl has no perceived phones (openslr's scores), so strict "
+            "is 0; run the fetch step again, which writes it from the pinned scores",
+            file=sys.stderr,
+        )
     decided = decide(tally, args)
     stress = decide_stress(tally, args)
     args.out.mkdir(parents=True, exist_ok=True)

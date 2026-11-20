@@ -1,7 +1,8 @@
 /**
  * What `dump.ts` writes for each word of an utterance, one JSON line each:
  * the pronunciation the alignment chose, each phone's goodness
- * (`pronounce/gop.ts`), each vowel's stress cues, the dictionary's stress
+ * (`pronounce/gop.ts`), each vowel's stress cues (over the stretch it owns,
+ * `ownedSpans`), the dictionary's stress
  * (and which vowel the other accepted pronunciations stress), and every swap the checks look at with its posterior and the conditions
  * `judge.ts` marks it under (`candidatesOf`), so `stats.py` can choose
  * cut-offs that the extension then applies exactly as measured.
@@ -10,7 +11,7 @@
 import type { Posteriors } from "../../pronounce/ctc";
 import { type Dictionary, sourceOf, stressOf } from "../../pronounce/dictionary";
 import type { AlignedPhone } from "../../pronounce/force-align";
-import { phoneScore, stressCues } from "../../pronounce/gop";
+import { ownedSpans, phoneScore, type Span, stressCues } from "../../pronounce/gop";
 import {
   type Candidate,
   candidatesOf,
@@ -42,6 +43,9 @@ export type VowelRecord = {
   at: number;
   phone: string;
   stressed: boolean;
+  /** The frames the vowel owns (`gop.ts`'s `ownedSpans`), which its cues are measured over; halves where blanks are split. */
+  from: number;
+  to: number;
   durationMs: number;
   rmsDb: number;
   f0Hz: number | null;
@@ -96,7 +100,8 @@ export function utteranceRecords(
   const words = wordsOf(text, audio.length);
   const read = readPiece(post, vocab, dictionary, words);
   if (read === null) return { utt, error: `no alignment (${post.frames} frames)` };
-  return words.map((word, i) => wordRecord(utt, word.word, i, read, audio));
+  const spans = ownedSpans(read.alignment.words, post.frames);
+  return words.map((word, i) => wordRecord(utt, word.word, i, read, audio, spans[i] ?? []));
 }
 
 /** Each aligned phone's goodness, rounded. */
@@ -113,21 +118,24 @@ function phoneRecords(read: ReadPiece, phones: readonly AlignedPhone[]): PhoneRe
   });
 }
 
-/** The stress cues of the vowels of `said` at `vowelAt`, as aligned in `phones`. */
+/** The stress cues of the vowels of `said` at `vowelAt`, as aligned in `phones`, over the stretches they own (`spans`). */
 function vowelRecords(
   audio: Float32Array,
   said: readonly string[],
   phones: readonly AlignedPhone[],
+  spans: readonly Span[],
   vowelAt: readonly number[],
   stress: number,
 ): VowelRecord[] {
   return vowelAt.map((at): VowelRecord => {
-    const phone = phones[at] ?? { phone: said[at] ?? "", from: 0, to: 0 };
-    const cues = stressCues(audio, phone);
+    const span = spans[at] ?? { from: 0, to: 0 };
+    const cues = stressCues(audio, span);
     return {
       at,
-      phone: phone.phone,
+      phone: phones[at]?.phone ?? said[at] ?? "",
       stressed: at === stress,
+      from: span.from,
+      to: span.to,
       durationMs: cues.durationMs,
       rmsDb: round(cues.rmsDb),
       f0Hz: cues.f0Hz === null ? null : round(cues.f0Hz),
@@ -142,6 +150,7 @@ function wordRecord(
   i: number,
   read: ReadPiece,
   audio: Float32Array,
+  spans: readonly Span[],
 ): WordRecord {
   const entry = read.entries[i] ?? { key: "", pronunciations: [], judged: false };
   const chosen = chosenOf(read, i);
@@ -167,7 +176,7 @@ function wordRecord(
     stressVowel: vowelAt.indexOf(stress),
     stressAccepts: chosen === null ? [] : acceptedStresses(entry.pronunciations, said),
     phones: phoneRecords(read, phones),
-    vowels: vowelRecords(audio, said, phones, vowelAt, stress),
+    vowels: vowelRecords(audio, said, phones, spans, vowelAt, stress),
     candidates: candidatesOf(read, i).map((one) => ({ ...one, posterior: round(one.posterior) })),
   };
 }

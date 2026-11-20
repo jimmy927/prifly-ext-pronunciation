@@ -14,9 +14,11 @@ The steps (`run.py` runs all three, each resumable):
    LibriSpeech dev-clean + test-clean (openslr 12, capped at 6 h), a British/Irish subset of
    VCTK 0.92 (Edinburgh DataShare, 4 h over 68 speakers; only those files are read out of the
    11.7 GB zip, by HTTP ranges), speechocean762 (openslr 101, CC BY 4.0, with its per-phone
-   scores as `labels.jsonl`), and with `--l2arctic PATH` a local L2-ARCTIC copy (its
-   annotation TextGrids as `labels.jsonl`). Downloads come only from openslr.org and
-   datashare.ed.ac.uk; nothing is uploaded.
+   scores as `labels.jsonl`; the scores come from the corpus's GitHub repository at a pinned
+   commit, checked by hash, since only that `scores.json` says which phone was heard
+   instead), and with `--l2arctic PATH` a local L2-ARCTIC copy (its annotation TextGrids as
+   `labels.jsonl`). Downloads come only from openslr.org, datashare.ed.ac.uk and
+   raw.githubusercontent.com; nothing is uploaded.
 2. `dump.ts`: the extension's own pinned model (uint8 wav2vec2-lv-60-espeak, through the
    worker's `openPhoneModel`) and dictionaries (Britfone + CMUdict, fetched by
    `pronounce/models.ts` into `WORK/models`), one JSON line per word: chosen pronunciation,
@@ -84,6 +86,13 @@ About an hour all told; the box can go once the three files are copied back.
 
 ## Running parts again
 
+- After a change to what a phone was heard as in the labels: the fetch step again (a finished
+  speechocean762 whose `labels.jsonl` predates the pinned scores is written again from them,
+  its wavs kept; seconds), then the stats step. The dump need not run again.
+- After a change to what the dump measures (vowels' cues are over the stretch each vowel owns,
+  `pronounce/gop.ts`'s `ownedSpans`, since the dump's vowels got `from`/`to`): the dump step
+  again; its output folder must be emptied first, since dump.ts skips utterances already
+  there. stats.py says so in a warning, and in the report, when the dump is older.
 - Only the statistics, e.g. with another false-alarm budget:
   `python3 tools/calibrate/run.py --work /workspace/calibrate --steps stats`, or `stats.py`
   directly with `--fa-rate`, `--min-precision`, `--min-flags`.
