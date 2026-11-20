@@ -100,6 +100,31 @@ These rules come from a benchmark on 13 Speech Accent Archive speakers (5
 German, 5 Swedish, 3 native English), where every other kind of edit was as
 common in natives as in learners. Do not retune them without rerunning it.
 
+### What ships now
+
+Only the Z/S underline (z said as s, and the reverse) is drawn. Every other
+substitution check, word stress and the confirmed-vowel underlines were measured
+(`tools/calibrate`, on LibriSpeech, VCTK and speechocean762's Mandarin learners)
+against a bar of 80% precision on labelled learner flags, and none reached it,
+so `pronounce/data/thresholds.json` has them `"off"`. Z/S ships by decision: its
+55% precision rests on 22 labelled flags, and natives trigger it on at most
+0.07% of words. The full run is in [`tools/calibrate/report.md`](tools/calibrate/report.md).
+
+| check                      | learner precision                   | native flags per word at 0.70 | ships                      |
+| -------------------------- | ----------------------------------- | ----------------------------- | -------------------------- |
+| Z/S                        | 55%                                 | 0.07%                         | on (0.70 maybe, 0.88 sure) |
+| final devoicing            | 17%                                 | 0.11%                         | off                        |
+| th                         | 15%                                 | 0.06%                         | off                        |
+| w/v                        | 9%                                  | 0.00%                         | off                        |
+| sh/ch                      | 13% (16 flags, under the 20 needed) | 0.04%                         | off                        |
+| word stress                | 19%                                 | not tabulated                 | off                        |
+| confirmed vowel underlines | not reached 80%                     | not tabulated                 | off (`vowel-patterns`)     |
+
+The confirmed vowel underlines have their own switch, the `vowel-patterns`
+entry of `thresholds.json`: they are drawn only when it says `"off": false`;
+no entry, or no file, is off. The accent profile and the "Your accent" panel
+do not depend on it: they only show.
+
 ## Your accent
 
 Vowels cannot be judged one word at a time, so they are measured over all your
@@ -112,12 +137,13 @@ below native speakers' 10th percentile (`pronounce/data/native-stats.json`, from
 (`panel/`) shows the three confirmed sounds furthest from native, the words they
 were heard in, and Yours and Say it right for one of them.
 
-A confirmed vowel also comes back as an underline (`pronounce/confirmed.ts`): a
-later word with that vowel is marked when its vowel sits below the natives' 0.5th
-percentile (at most 1 native word in 200) and sounds like the pattern's (the A
-in "cap" for the U in "cup"); "sure" only beyond 1 in 2000. Without
-`native-stats.json` the profile only collects: the panel says so, and nothing is
-underlined from it.
+A confirmed vowel can also come back as an underline (`pronounce/confirmed.ts`),
+but that is off as shipped (see "What ships now"): with the `vowel-patterns` entry
+of `thresholds.json` set to `"off": false`, a later word with that vowel is
+marked when its vowel sits below the natives' 0.5th percentile (at most 1 native
+word in 200) and sounds like the pattern's (the A in "cap" for the U in "cup");
+"sure" only beyond 1 in 2000. Without `native-stats.json` the profile only
+collects: the panel says so, and nothing is compared.
 
 ## What it downloads
 

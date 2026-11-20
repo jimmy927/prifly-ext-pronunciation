@@ -6,7 +6,13 @@
     "useIgnoreFile": true
   },
   "files": {
-    "includes": ["**", "!**/node_modules", "!.prifly"]
+    "includes": [
+      "**",
+      "!**/node_modules",
+      "!.prifly",
+      "!pronounce/data",
+      "!tools/calibrate/report.md"
+    ]
   },
   "formatter": {
     "enabled": true,

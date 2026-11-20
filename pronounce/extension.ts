@@ -21,6 +21,7 @@ import type { OnMarkAction } from "./play-shim";
 import { AccentProfile } from "./profile";
 import { PronounceRunner, type RunnerDeps } from "./runner";
 import { statusLine } from "./status";
+import { loadVowelPatterns } from "./thresholds";
 import { readReference, Voice } from "./voice";
 import { spawnPronounce } from "./worker-pipe";
 
@@ -29,6 +30,8 @@ export type StartDeps = Pick<RunnerDeps, "ensure" | "spawn" | "backoffMs"> & {
   voice?: Voice;
   /** The natives' statistics (`native.ts`); left out, `NATIVE_STATS_PATH` is read. */
   natives?: () => Promise<NativeStats | null>;
+  /** Whether the confirmed-pattern vowel underlines are on (`loadVowelPatterns`); left out, `thresholds.json` is read. */
+  vowelPatterns?: () => Promise<boolean>;
   /** Clock for the accent profile; tests set it. */
   now?: () => number;
 };
@@ -71,11 +74,13 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
   });
   let natives: NativeStats | null = null;
   const profile = new AccentProfile(api.state, () => natives, deps.now);
+  let patternsOn = false;
   const coach = new Coach(
     api,
     (audio, words) => runner.judge(audio, words),
     deps.voice ?? null,
     profile,
+    () => patternsOn,
   );
   const panel = new AccentPanel({
     profile,
@@ -93,6 +98,9 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
     (() => loadNativeStats(undefined, (why) => api.log("nativeStatsIgnored", { why })));
   void readNatives().then((stats) => {
     natives = stats;
+  });
+  void (deps.vowelPatterns ?? (() => loadVowelPatterns()))().then((on) => {
+    patternsOn = on;
   });
   void runner.start();
   api.log("activated", {});

@@ -73,7 +73,11 @@ test("no underline from a pattern that is not confirmed", () => {
 });
 
 /** A coach over a fake api whose profile has the cup pattern confirmed, judging "much" at `lpr` in every piece. */
-async function coachWith(lpr: number, settings: SettingValues = { [UNDERLINE]: UNDERLINE_ALL }) {
+async function coachWith(
+  lpr: number,
+  settings: SettingValues = { [UNDERLINE]: UNDERLINE_ALL },
+  patternsOn = true,
+) {
   const fake = fakeDictation(settings);
   const profile = new AccentProfile(
     undefined,
@@ -86,6 +90,7 @@ async function coachWith(lpr: number, settings: SettingValues = { [UNDERLINE]: U
     async () => ({ marks: [], scores: [much(lpr)] }),
     null,
     profile,
+    () => patternsOn,
   );
   return { fake, coach, profile };
 }
@@ -124,8 +129,25 @@ test("a word another check marked keeps that mark alone", async () => {
     async () => ({ marks: [THREE_AS_TREE], scores: [much(-6)] }),
     null,
     profile,
+    () => true,
   );
   coach.piece(threeTrees());
   await coach.settled();
   expect(fake.marks[0]?.marks.map((one) => one.said)).toEqual(["TREE"]);
+});
+
+test("with vowel-patterns off or missing the coach underlines nothing from the pattern, though natives and a confirmed pattern are there", async () => {
+  const { fake, coach, profile } = await coachWith(-6, { [UNDERLINE]: UNDERLINE_ALL }, false);
+  coach.piece(threeTrees());
+  await coach.settled();
+  expect(fake.marks).toEqual([]);
+  // The profile still collects, so the panel keeps showing it.
+  expect(profile.pieces()).toBe(MIN_EXAMPLES + 1);
+  expect(profile.assessed().some((one) => one.confirmed)).toBe(true);
+  // A coach built without the switch (the default) is off too.
+  const bare = fakeDictation();
+  const plain = new Coach(bare.api, async () => ({ marks: [], scores: [much(-6)] }), null, profile);
+  plain.piece(threeTrees());
+  await plain.settled();
+  expect(bare.marks).toEqual([]);
 });

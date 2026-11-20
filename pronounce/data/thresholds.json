@@ -1,0 +1,54 @@
+{
+  "generated": "2026-11-20",
+  "source": "librispeech 2990, speechocean762 5000, vctk 3548",
+  "contrasts": {
+    "z-s": {
+      "off": false,
+      "maybe": 0.7,
+      "sure": 0.88,
+      "why": "ships by the reader's decision despite 55% precision on speechocean762's Mandarin learners (22 labelled flags, under the 80% bar); natives trigger it at 0.07% of words at 0.70 and 0.05% at 0.88"
+    },
+    "vowel-patterns": {
+      "off": true,
+      "why": "confirmed-pattern vowel underlines are measured but did not reach the 80% learner-precision bar, so they stay off; the accent profile and the Your accent panel still show from native-stats.json"
+    },
+    "final-devoicing": {
+      "off": true,
+      "maybe": 0.5,
+      "sure": 0.725,
+      "why": "precision 0.17 under 0.80"
+    },
+    "th": {
+      "off": true,
+      "maybe": 0.5,
+      "sure": 0.5,
+      "why": "precision 0.15 under 0.80"
+    },
+    "w-v": {
+      "off": true,
+      "maybe": 0.5,
+      "sure": 0.5,
+      "why": "precision 0.09 under 0.80"
+    },
+    "sh-ch": {
+      "off": true,
+      "maybe": 0.5,
+      "sure": 0.5,
+      "why": "only 16 labelled learner flags (need 20)"
+    },
+    "stress": {
+      "off": true,
+      "cuts": {
+        "dur+rms+f0": {
+          "maybe": 1.15,
+          "sure": 1.6
+        },
+        "dur+rms": {
+          "maybe": 1.25,
+          "sure": 1.8
+        }
+      },
+      "why": "precision 0.19 under 0.80"
+    }
+  }
+}

@@ -10,7 +10,9 @@
  * The file: `{ "contrasts": { "z-s": { "maybe": 0.74, "sure": 0.9 }, "th": { "off": true } } }`;
  * other top-level keys (where it came from, when) are ignored here, and so is
  * the `stress` entry, which `stress.ts` reads: word stress, unlike the
- * contrasts, is off unless the file turns it on.
+ * contrasts, is off unless the file turns it on. The `vowel-patterns` entry
+ * (`{ "off": false }` to turn them on) is the switch of the confirmed-pattern
+ * vowel underlines (`confirmed.ts`); see `loadVowelPatterns`.
  */
 
 import { join } from "node:path";
@@ -76,6 +78,34 @@ export async function loadThresholds(path: string = THRESHOLDS_PATH): Promise<Th
     const why = caught instanceof Error ? caught.message : String(caught);
     process.stderr.write(`pronounce: ${path} ignored, defaults used: ${why}\n`);
     return NO_THRESHOLDS;
+  }
+}
+
+/** The id of the vowel-pattern switch in `thresholds.json`, beside the contrasts'. */
+export const VOWEL_PATTERNS_ID = "vowel-patterns";
+
+const Switch = z.object({ off: z.boolean().optional() });
+
+/**
+ * Whether the file turns the confirmed-pattern vowel underlines on: only an
+ * entry `"vowel-patterns": { "off": false }`. No entry, or one without
+ * `"off": false`, is off. Throws on JSON of another shape.
+ */
+export function parseVowelPatterns(json: unknown): boolean {
+  const raw = File.parse(json).contrasts[VOWEL_PATTERNS_ID];
+  return raw !== undefined && Switch.parse(raw).off === false;
+}
+
+/** `parseVowelPatterns` of the file at `path`; off when there is no file or it is not valid (said on stderr). */
+export async function loadVowelPatterns(path: string = THRESHOLDS_PATH): Promise<boolean> {
+  const file = Bun.file(path);
+  if (!(await file.exists())) return false;
+  try {
+    return parseVowelPatterns(await file.json());
+  } catch (caught) {
+    const why = caught instanceof Error ? caught.message : String(caught);
+    process.stderr.write(`pronounce: vowel underlines off, ${path}: ${why}\n`);
+    return false;
   }
 }
 

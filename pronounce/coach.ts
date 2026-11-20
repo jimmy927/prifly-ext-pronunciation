@@ -154,6 +154,8 @@ export class Coach {
   private readonly judge: JudgeFn;
   private readonly voice: Pick<Voice, "yours" | "sayRight"> | null;
   private readonly profile: AccentProfile | null;
+  /** Whether `thresholds.json` turns the confirmed-pattern underlines on; off unless it says so. */
+  private readonly patternsOn: () => boolean;
   private notMistakes: NotMistake[] = [];
   /** Each session's last dictation: its id, and its pieces by number. */
   private readonly kept = new Map<string, { dict: string; pieces: Map<number, KeptPiece> }>();
@@ -169,7 +171,9 @@ export class Coach {
     judge: JudgeFn,
     voice: Pick<Voice, "yours" | "sayRight"> | null = null,
     profile: AccentProfile | null = null,
+    patternsOn: () => boolean = () => false,
   ) {
+    this.patternsOn = patternsOn;
     this.api = api;
     this.judge = judge;
     this.voice = voice;
@@ -236,7 +240,7 @@ export class Coach {
 
   /** The words underlined from a vowel pattern the profile has confirmed (`confirmed.ts`), where no other check marked them. */
   private patternMarks(judged: Judgement, spots: readonly Spot[]): Judged[] {
-    if (this.profile === null) return [];
+    if (this.profile === null || !this.patternsOn()) return [];
     return confirmedMarks(
       judged.scores,
       spots.map((spot) => spot.text),
