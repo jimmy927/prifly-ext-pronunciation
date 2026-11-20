@@ -9,6 +9,7 @@ import { audioOf, escapeXml, floatsOfS16 } from "../pronounce/edge-tts";
 import { FlagCheck } from "../pronounce/flag-check";
 import type { Flag } from "../pronounce/flags";
 import type { Judged, JudgeWord } from "../pronounce/judge";
+import { oneAtATime } from "../pronounce/latest-queue";
 import {
   NATIVE_CHECK,
   NATIVE_VOICES,
@@ -342,6 +343,102 @@ test("Edge's token is edge-tts 7.3.1's, and its messages and audio are read as e
   const other = new TextEncoder().encode("Path:turn.start\r\n");
   expect(audioOf(new Uint8Array([0, other.length, ...other]))).toBeNull();
   expect([...floatsOfS16(new Uint8Array([0, 0x40, 0, 0xc0]))]).toEqual([0.5, -0.5]);
+});
+
+test("the two readings are fetched side by side but judged one after another", async () => {
+  const fetching: string[] = [];
+  let release: () => void = () => undefined;
+  const fetched = new Promise<void>((resolve) => {
+    release = resolve;
+  });
+  const control = new NativeControl({
+    read: async (_text, voice) => {
+      fetching.push(voice);
+      await fetched;
+      return readingOf(voice);
+    },
+  });
+  let running = 0;
+  let most = 0;
+  const answer = control.natives("Three trees.", ["Three", "trees"], async () => {
+    running++;
+    most = Math.max(most, running);
+    await Bun.sleep(2);
+    running--;
+    return [];
+  });
+  await until(() => fetching.length === 2);
+  release();
+  expect((await answer).error).toBeNull();
+  expect(most).toBe(1);
+});
+
+test("the coach's judge takes one request at a time, in order, none dropped, a failure not stopping the next", async () => {
+  const order: string[] = [];
+  let running = 0;
+  let most = 0;
+  const judge = oneAtATime(async (name: string) => {
+    running++;
+    most = Math.max(most, running);
+    await Bun.sleep(1);
+    running--;
+    order.push(name);
+    if (name === "b") throw new Error("b failed");
+    return name;
+  });
+  const all = await Promise.allSettled([judge("a"), judge("b"), judge("c")]);
+  expect(order).toEqual(["a", "b", "c"]);
+  expect(most).toBe(1);
+  expect(all.map((one) => one.status)).toEqual(["fulfilled", "rejected", "fulfilled"]);
+});
+
+test("Check your flags cancelled during a native reading counts nothing of that sentence", async () => {
+  const { state } = fakeState();
+  let reading = false;
+  const flag: Flag = { index: 0, check: "th", score: 0.9, sound: "th → t", fix: "Tongue." };
+  const check = new FlagCheck({
+    state,
+    personal: new Personal(state),
+    list: async () => [
+      {
+        id: "p",
+        wav: "/rec/0.wav",
+        text: "Three.",
+        words: [{ text: "Three", start: 0, end: 5, startMs: 100, endMs: 500 }],
+        rate: 48_000,
+      },
+    ],
+    read: async () => ({
+      full: { rate: 48_000, samples: new Float32Array(48_000) },
+      audio: new Float32Array(16_000),
+    }),
+    worker: async () => ({
+      scan: async () => ({ flags: [flag], scores: [] }),
+      stop: () => undefined,
+    }),
+    natives: () => null,
+    switchedOn: () => new Set(),
+    control: () =>
+      new NativeControl({
+        read: async (_text, voice) => {
+          reading = true;
+          await Bun.sleep(20);
+          return readingOf(voice);
+        },
+      }),
+    voice: null,
+    sayRight: () => null,
+    log: () => undefined,
+  });
+  await check.start();
+  await until(() => reading);
+  check.cancel();
+  await check.settled();
+  const view = check.view();
+  expect(view.job.state).toBe("cancelled");
+  expect(view.job.done).toBe(0);
+  expect(view.checks.find((one) => one.id === "th")?.flags).toHaveLength(0);
+  expect(view.checks.every((one) => one.dropped === 0)).toBe(true);
 });
 
 async function until(ready: () => boolean): Promise<void> {

@@ -17,12 +17,12 @@
  * With the native check on (`native-control.ts`), a piece whose settings draw a
  * mark is not marked until a native reading of its sentence has been judged
  * too: the marks it shares are kept but not drawn, so none is drawn and then
- * taken away. A piece that drew nothing keeps its sentence, and is compared
- * when a setting later draws one of its marks.
+ * taken away. A piece that drew nothing is compared once a setting draws one.
  *
  * Dictation never waits on any of it: a handler keeps what it needs and
  * returns, and the judging runs after, one request at a time. While one
- * runs, the newest that came meanwhile waits and any older one is dropped.
+ * runs, the newest that came meanwhile waits and any older one is dropped
+ * (`latest-queue.ts`); the judge, native readings included, one at a time.
  *
  * The last dictation of each session is kept with its pieces' audio (prifly
  * keeps none for an extension) until the next one starts or the session is
@@ -51,20 +51,15 @@ import {
   UnderlineSwitch,
 } from "./drawn";
 import { inWordOrder, type Judged, type JudgeWord } from "./judge";
-import { LatestQueue } from "./latest-queue";
+import { LatestQueue, oneAtATime } from "./latest-queue";
 import { type NativeControl, withNatives } from "./native-control";
 import { isNotMistake, type NotMistake, StoredNotMistakes, withNotMistake } from "./not-mistakes";
 import type { Personal } from "./personal";
-import {
-  type AudioFull,
-  type FullPiece,
-  MARK_AUDIO,
-  type PlayAction,
-  type PlayResult,
-} from "./play-shim";
+import { fullRateOf, samplesOf } from "./piece-audio";
+import { type AudioFull, MARK_AUDIO, type PlayAction, type PlayResult } from "./play-shim";
 import type { AccentProfile, PieceAt } from "./profile";
 import type { Judgement } from "./scores";
-import { MIN_RATE, PIECE_RATE, type Voice } from "./voice";
+import { PIECE_RATE, type Voice } from "./voice";
 import { steppedVowelMarks } from "./vowels";
 
 /** The id of the mark's own action; the window adds Listen itself. */
@@ -84,8 +79,6 @@ const KEPT_PIECES = 40;
 export const KEPT_SESSIONS = 8;
 /** Marked pieces remembered for their marks' actions. */
 const SHOWN_GROUPS = 200;
-/** Audio samples per millisecond: the piece's audio is 16 kHz. */
-const SAMPLES_PER_MS = 16;
 
 export type JudgeFn = (
   audio: Float32Array,
@@ -133,18 +126,6 @@ export function isEnglish(language: string): boolean {
 const groupKey = (where: { sessionId: string; dict: string; piece: number; at?: number }) =>
   `${where.sessionId}\n${where.dict}\n${where.piece}\n${where.at ?? ""}`;
 
-/** A word's place in the piece's audio, in samples. */
-function samplesOf(word: { startMs: number; endMs: number }): { from: number; to: number } {
-  const from = Math.max(0, Math.round(word.startMs * SAMPLES_PER_MS));
-  return { from, to: Math.max(from, Math.round(word.endMs * SAMPLES_PER_MS)) };
-}
-
-/** The piece's audio at the device's own rate, when prifly gave it and it is 44.1 kHz or more. */
-function fullRateOf(piece: DictationPiece): AudioFull | undefined {
-  const full = (piece as FullPiece).audioFull;
-  return full !== undefined && full.rate >= MIN_RATE && full.samples.length > 0 ? full : undefined;
-}
-
 export class Coach {
   private readonly api: CoachApi;
   private readonly judge: JudgeFn;
@@ -152,7 +133,7 @@ export class Coach {
   private readonly profile: AccentProfile | null;
   private readonly personal: Pick<Personal, "mark"> | null;
   private readonly control: Control | null;
-  private readonly controlling = new Set<string>(); // groups in `controlLater`
+  private readonly controlling = new Set<Group>(); // groups in `controlLater`
   private notMistakes: NotMistake[] = [];
   /** Each session's last dictation: its id, and its pieces by number. */
   private readonly kept = new Map<string, { dict: string; pieces: Map<number, KeptPiece> }>();
@@ -172,7 +153,7 @@ export class Coach {
     options: CoachOptions = {},
   ) {
     this.api = api;
-    this.judge = judge;
+    this.judge = oneAtATime(judge);
     this.queue = new LatestQueue((event, fields) => api.log(event, fields));
     this.voice = voice;
     this.profile = profile;
@@ -265,15 +246,20 @@ export class Coach {
     return { ...rest, shown: marks };
   }
 
-  /** `group`'s native check after a setting drew it, outside the queue; drawn when done unless it changed meanwhile. */
+  /** `group`'s native check after a setting drew it, outside the queue; drawn when done, or run again on the group that replaced it meanwhile (its readings are kept). */
   private controlLater(group: Group): void {
+    if (this.controlling.has(group)) return;
+    this.controlling.add(group);
     const key = groupKey(group);
-    if (this.controlling.has(key)) return;
-    this.controlling.add(key);
-    const draw = (done: Group) => this.groups.get(key) === group && this.show(done, true);
+    const draw = (done: Group) => {
+      const now = this.groups.get(key);
+      if (now === group) this.show(done, true);
+      else if (now !== undefined && this.needsControl(now)) this.controlLater(now);
+    };
     const failed = (caught: unknown) => this.api.log("controlFailed", { error: String(caught) });
-    const done = () => this.controlling.delete(key);
-    void this.controlled(group).then(draw, failed).finally(done);
+    void this.controlled(group)
+      .then(draw, failed)
+      .finally(() => this.controlling.delete(group));
   }
 
   /** The piece's content words' scores added to the accent profile; a refused write is logged. */

@@ -42,7 +42,9 @@ voice reading the same sentence gets it too: you cannot tell by ear whether a
 flag is yours or the model's (or the dictionary's). A piece with a mark to draw
 is read by two Edge voices, en-GB-RyanNeural (Say it right's) and
 en-US-GuyNeural, since the dictionary takes British and American ways of
-saying a word. Only the sentence's text goes to Edge, from this machine
+saying a word. Only the sentence's text goes to Edge (Microsoft's online
+voices; every sentence with a mark, and each sentence a Check your flags job
+scores), from this machine
 (`pronounce/edge-tts.ts`; Edge sends only mp3, which `ffmpeg` on the PATH
 decodes at its 24 kHz), and each reading is kept per voice and text in
 `<prifly data>/pronunciation/voice/`. Resampled to 16 kHz, each is judged by

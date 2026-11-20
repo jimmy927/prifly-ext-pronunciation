@@ -97,6 +97,28 @@ export function withNatives<T extends Flagged & Controlled>(
   };
 }
 
+/**
+ * `flags` split by the native readings of `text` (`NativeControl.natives`): those they get too
+ * `dropped`, the rest `flags`; `unchecked` when no reading could be judged; the log line's fields.
+ */
+export async function splitByNatives<T extends Flagged>(
+  control: Pick<NativeControl, "natives">,
+  text: string,
+  words: readonly string[],
+  flags: readonly T[],
+  flagsOf: NativeFlagsOf,
+): Promise<{
+  flags: T[];
+  dropped: T[];
+  unchecked: boolean;
+  fields: Record<string, string | number>;
+}> {
+  const answer = await control.natives(text, words, flagsOf);
+  const { marks, fields } = withNatives(flags, answer);
+  const dropped = marks.filter((one) => one.native);
+  return { flags: marks.filter((one) => !one.native), dropped, unchecked: !!answer.error, fields };
+}
+
 /** The words of a native reading `length` samples long: each may sit anywhere in it. */
 export function wholeClipWords(words: readonly string[], length: number): JudgeWord[] {
   return words.map((word) => ({ word, from: 0, to: length }));
@@ -141,19 +163,19 @@ export class NativeControl {
     const errors: string[] = [];
     let judged = 0;
     const flags: Flagged[] = [];
-    await Promise.all(
-      this.voices.map(async (voice) => {
-        try {
-          const audio = await this.audio(text, voice);
-          const found = await flagsOf(audio, wholeClipWords(words, audio.length));
-          if (found === null) throw new Error("the model could not judge the reading");
-          judged++;
-          flags.push(...found);
-        } catch (caught) {
-          errors.push(`${voice}: ${errorText(caught)}`);
-        }
-      }),
-    );
+    // Read from Edge side by side; judged one after another, so the model gets one request at a time.
+    const readings = this.voices.map((voice) => this.audio(text, voice));
+    for (const [at, voice] of this.voices.entries()) {
+      try {
+        const audio = await (readings[at] ?? this.audio(text, voice));
+        const found = await flagsOf(audio, wholeClipWords(words, audio.length));
+        if (found === null) throw new Error("the model could not judge the reading");
+        judged++;
+        flags.push(...found);
+      } catch (caught) {
+        errors.push(`${voice}: ${errorText(caught)}`);
+      }
+    }
     return { flags, error: judged > 0 ? null : errors.join("; ") };
   }
 

@@ -14,13 +14,13 @@
 
 import { z } from "zod";
 import { CHECK_IDS, CHECK_LABELS, type CheckId } from "./checks";
-import { type Flag, vowelFlags } from "./flags";
+import { type Flag, flagsOfScan } from "./flags";
 import type { NativeStats } from "./native";
-import { type NativeControl, withNatives } from "./native-control";
+import { type NativeControl, splitByNatives } from "./native-control";
 import type { PastPiece } from "./past-pieces";
 import type { Personal, Tally, Verdict } from "./personal";
 import { resample } from "./resample";
-import type { ScanAnswer, ScanWorker } from "./scan-worker";
+import type { ScanWorker } from "./scan-worker";
 import { type Sensitivity, sensitivityLabel } from "./sensitivity";
 import { PIECE_RATE, type Voice } from "./voice";
 import type { Wav } from "./wav";
@@ -189,11 +189,9 @@ function leftWords(seconds: number): string {
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
 type Stats = NativeStats | null;
-
-/** Every flag of a scanned piece: the worker's and the vowels'. */
-export function flagsOfScan(answer: ScanAnswer, stats: Stats): Flag[] {
-  return [...answer.flags, ...vowelFlags(answer.scores, stats)];
-}
+/** A scored piece: its flags kept, those the native check dropped, and whether it could not check them. */
+type Scanned = { flags: StoredFlag[]; dropped: Flag[]; unchecked: boolean };
+const NOTHING: Scanned = { flags: [], dropped: [], unchecked: false };
 
 /** The piece's flags as kept: each with its word, its sentence and where its audio is. */
 export function storedFlags(piece: PastPiece, flags: readonly Flag[]): StoredFlag[] {
@@ -317,14 +315,14 @@ export class FlagCheck {
     }
   }
 
-  /** One piece's flags; none when its recording can no longer be read (prifly pruned it). Throws when the worker fails it. */
-  private async scanOne(worker: ScanWorker, piece: PastPiece): Promise<StoredFlag[]> {
+  /** One piece's flags, and those the native check dropped; none when its recording can no longer be read (prifly pruned it). Throws when the worker fails it. */
+  private async scanOne(worker: ScanWorker, piece: PastPiece): Promise<Scanned> {
     let audio: Float32Array;
     try {
       ({ audio } = await this.deps.read(piece.wav));
     } catch (caught) {
       this.deps.log("flagPieceUnread", { piece: piece.id, error: errorText(caught) });
-      return [];
+      return NOTHING;
     }
     const words = piece.words.map((word) => ({
       word: word.text,
@@ -333,29 +331,33 @@ export class FlagCheck {
     }));
     const stats = this.deps.natives();
     const flags = flagsOfScan(await worker.scan(audio, words), stats);
-    return storedFlags(piece, await this.nativeKept(worker, piece, flags, stats));
+    const native = await this.nativeKept(worker, piece, flags, stats);
+    return { ...native, flags: storedFlags(piece, native.flags) };
   }
 
   /**
-   * `flags` without those a native reading of the sentence gets too, scanned the same way
-   * (`native-control.ts`), each check's count of them added to `dropped`; all of them when the
-   * native check is off, and when no reading could be judged (counted in `unchecked`).
+   * `flags` split by the native check: those a native reading of the sentence, scanned the same
+   * way, gets too are `dropped` (`native-control.ts`); none when it is off, or when no reading
+   * could be judged (`unchecked`).
    */
   private async nativeKept(worker: ScanWorker, piece: PastPiece, flags: Flag[], stats: Stats) {
     const control = this.deps.control?.() ?? null;
-    if (control === null || flags.length === 0) return flags;
+    if (control === null || flags.length === 0) return { flags, dropped: [], unchecked: false };
     const words = piece.words.map((word) => word.text);
-    const answer = await control.natives(piece.text, words, async (audio, asked) =>
+    const split = await splitByNatives(control, piece.text, words, flags, async (audio, asked) =>
       flagsOfScan(await worker.scan(audio, asked), stats),
     );
-    const { marks, fields } = withNatives(flags, answer);
+    this.deps.log("control", { piece: piece.id, ...split.fields });
+    return split;
+  }
+
+  /** A scored piece kept, once the job is still live after it: its flags, and the native check's counts. */
+  private add(found: Scanned): void {
     const dropped = { ...this.stored.dropped };
-    for (const { check } of marks.filter((one) => one.native))
-      dropped[check] = (dropped[check] ?? 0) + 1;
-    const unchecked = (this.stored.unchecked ?? 0) + (answer.error === null ? 0 : 1);
-    this.stored = { ...this.stored, dropped, unchecked };
-    this.deps.log("control", { piece: piece.id, ...fields });
-    return marks.filter((one) => !one.native);
+    for (const { check } of found.dropped) dropped[check] = (dropped[check] ?? 0) + 1;
+    const unchecked = (this.stored.unchecked ?? 0) + (found.unchecked ? 1 : 0);
+    const flags = [...this.stored.flags, ...found.flags];
+    this.stored = { ...this.stored, flags, dropped, unchecked, scanned: ++this.job.done };
   }
 
   private async each(
@@ -374,15 +376,13 @@ export class FlagCheck {
         failed++;
         this.deps.log("flagPieceFailed", { piece: piece.id, error: errorText(caught) });
         if (failed >= MAX_FAILED) throw caught;
-        return [];
+        return NOTHING;
       });
       // Cancelled while the piece, or a native reading of it, was scored: it is not counted.
       if (found === null || !live()) break;
       // Only failures in a row stop the job.
       if (failed === before) failed = 0;
-      this.stored = { ...this.stored, flags: [...this.stored.flags, ...found] };
-      this.job.done++;
-      this.stored = { ...this.stored, scanned: this.job.done };
+      this.add(found);
       if (this.job.done % SAVE_EVERY === 0) await this.save(run, false);
     }
     if (run !== this.run) return;

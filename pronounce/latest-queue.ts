@@ -6,6 +6,22 @@
 
 export type Task = () => Promise<void>;
 
+/** `fn` with its calls run one at a time, in the order they were made; none is dropped. A call made while none runs starts at once. */
+export function oneAtATime<A extends unknown[], R>(
+  fn: (...args: A) => Promise<R>,
+): (...args: A) => Promise<R> {
+  let last: Promise<unknown> | null = null;
+  return (...args) => {
+    const run = last === null ? fn(...args) : last.then(() => fn(...args));
+    const settled = run.catch(() => undefined);
+    last = settled;
+    void settled.then(() => {
+      if (last === settled) last = null;
+    });
+    return run;
+  };
+}
+
 type Log = (event: string, fields: Record<string, string>) => void;
 
 export class LatestQueue {

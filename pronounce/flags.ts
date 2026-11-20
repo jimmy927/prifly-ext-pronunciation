@@ -122,6 +122,14 @@ function worstVowel(
   return worst;
 }
 
+/** Every flag of a scanned piece (`flag-check.ts`): the worker's and the vowels'. */
+export function flagsOfScan(
+  answer: { flags: readonly Flag[]; scores: readonly WordScores[] },
+  stats: NativeStats | null,
+): Flag[] {
+  return [...answer.flags, ...vowelFlags(answer.scores, stats)];
+}
+
 /** The vowel flags of a piece from its content words' scores: each word's vowel furthest past `Z_P5`. */
 export function vowelFlags(scores: readonly WordScores[], stats: NativeStats | null): Flag[] {
   if (stats === null) return [];
