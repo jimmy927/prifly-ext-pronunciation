@@ -282,7 +282,7 @@ function checkSection(check, view) {
     el(
       "span",
       "tally",
-      `${check.flags.length} flags · ${check.marked} marked · ${check.right} right`,
+      `${check.flags.length} flag${check.flags.length === 1 ? "" : "s"} · ${check.marked} marked · ${check.right} right`,
     ),
   );
   section.append(summary);
