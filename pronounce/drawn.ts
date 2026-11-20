@@ -3,7 +3,8 @@
  * a mark is drawn and at which level (`sensitivity.ts`), the Underline setting which levels (sure
  * ones, or not sure ones too, or none), and each check's switch whether its marks are drawn at
  * all (`checks.ts`). Of a word marked by several checks, the first drawn in `CHECK_IDS` order is
- * its mark (`pickDrawn`).
+ * its mark (`pickDrawn`). While the "Native check" setting is on, a mark a native reading of the
+ * same sentence gets too is not drawn (`native-control.ts`).
  *
  * Underline's default became "Sure and not sure" when every check shipped on. A reader who had
  * picked "Sure mistakes only" before keeps that value in prifly's settings, which an extension
@@ -16,6 +17,7 @@ import type { DictationMark, ExtensionStateApi, SettingValues } from "@prifly/ex
 import { z } from "zod";
 import { type CheckId, switchedOn } from "./checks";
 import { type Judged, levelOf } from "./judge";
+import { NOT_CHECKED, nativeCheckOn } from "./native-control";
 import {
   drawnAt,
   levelAtStep,
@@ -43,16 +45,19 @@ type SwitchDoc = z.infer<typeof SwitchDoc>;
 
 export type Level = "sure" | "maybe";
 
-/** What decides which marks are drawn: the levels the Underline setting draws, the checks switched on, and the Sensitivity step (`sensitivity.ts`). */
+/** What decides which marks are drawn: the levels the Underline setting draws, the checks switched on, the Sensitivity step (`sensitivity.ts`) and whether the native check is on (`native-control.ts`). */
 export type Drawn = {
   levels: readonly Level[];
   checks: ReadonlySet<CheckId>;
   sensitivity: Sensitivity;
+  native: boolean;
 };
 
-/** A mark as given, with the word and what was heard in it, for "Not a mistake", its check and from which Sensitivity step it is drawn and drawn sure: whether it is drawn, and at which level, is the settings'. `score` is the mark's posterior; `from` and `to` are the word's samples in the piece's audio. */
+/** A mark as given, with the word and what was heard in it, for "Not a mistake", its check and from which Sensitivity step it is drawn and drawn sure: whether it is drawn, and at which level, is the settings'. `score` is the mark's posterior; `from` and `to` are the word's samples in the piece's audio; `index` (the word's place among those judged) and `sound` are what the native check compares (`native-control.ts`). */
 export type Shown = {
   mark: DictationMark;
+  index: number;
+  sound: string;
   word: string;
   heard: string;
   check: CheckId;
@@ -60,6 +65,10 @@ export type Shown = {
   score: number;
   from: number;
   to: number;
+  /** A native reading of the same sentence gets it too (`native-control.ts`): not drawn while the native check is on. */
+  native?: boolean;
+  /** The native check could not judge a native reading of its sentence: its card says so. */
+  unchecked?: boolean;
 };
 
 /** The card's line after the bold word: the check's name, what was off and the fix, no phonetic letters. */
@@ -94,15 +103,30 @@ export function shownMark(
         }
       : {}),
   };
-  const { word, heard, check, posterior: score } = one;
+  const { index, sound, word, heard, check, posterior: score } = one;
   const steps = stepsOf(one.steps, level);
-  return { mark, word, heard, check, steps, score, from: spot.from, to: spot.to };
+  return { mark, index, sound, word, heard, check, steps, score, from: spot.from, to: spot.to };
 }
 
-/** `one`'s mark as `drawn` draws it: its level the one at the Sensitivity step now, where prifly takes levels. */
-export function drawnMark(one: Pick<Shown, "mark" | "steps">, drawn: Drawn): DictationMark {
-  if (one.mark.level === undefined) return one.mark;
-  return { ...one.mark, level: levelAtStep(one.steps, drawn.sensitivity) };
+/**
+ * `one`'s mark as `drawn` draws it: its level the one at the Sensitivity step now, where prifly
+ * takes levels, and its card's line saying so when the native check is on but no native reading
+ * could be judged.
+ */
+export function drawnMark(
+  one: Pick<Shown, "mark" | "steps" | "unchecked">,
+  drawn: Drawn,
+): DictationMark {
+  const unchecked = drawn.native && one.unchecked === true;
+  const mark = unchecked ? { ...one.mark, detail: uncheckedDetail(one.mark.detail) } : one.mark;
+  if (mark.level === undefined) return mark;
+  return { ...mark, level: levelAtStep(one.steps, drawn.sensitivity) };
+}
+
+/** A card's line with `NOT_CHECKED` after it, within `markDictation`'s limit. */
+export function uncheckedDetail(detail: string): string {
+  const tail = ` ${NOT_CHECKED}.`;
+  return `${detail.slice(0, MAX_DETAIL - tail.length)}${tail}`;
 }
 
 /** The levels each option of the `underline` setting draws; an unknown value is the default, both. */
@@ -117,7 +141,12 @@ export function drawnBy(values: SettingValues | undefined, switched: boolean): D
   const levels = allowedLevels(
     switched && underline === UNDERLINE_SURE ? UNDERLINE_ALL : underline,
   );
-  return { levels, checks: switchedOn(values), sensitivity: sensitivityOf(values) };
+  return {
+    levels,
+    checks: switchedOn(values),
+    sensitivity: sensitivityOf(values),
+    native: nativeCheckOn(values),
+  };
 }
 
 /** Whether `drawn` draws nothing at all: Underline is Off, or every check is switched off. */
@@ -128,16 +157,15 @@ export function drawsNothing(drawn: Drawn): boolean {
 /**
  * The marks of `shown` that `drawn` draws: of each word's (by where it starts), in their order,
  * the first the Sensitivity step draws, at a level Underline draws there, whose check is
- * switched on; at most `max`.
+ * switched on, and which no native reading gets while the native check is on; at most `max`.
  */
-export function pickDrawn<T extends { mark: { start: number }; steps: Steps; check: CheckId }>(
-  shown: readonly T[],
-  drawn: Drawn,
-  max: number,
-): T[] {
+export function pickDrawn<
+  T extends { mark: { start: number }; steps: Steps; check: CheckId; native?: boolean },
+>(shown: readonly T[], drawn: Drawn, max: number): T[] {
   const taken = new Set<number>();
   const picked: T[] = [];
   for (const one of shown) {
+    if (drawn.native && one.native === true) continue;
     if (taken.has(one.mark.start) || !drawnAt(one.steps, drawn.sensitivity)) continue;
     if (!drawn.levels.includes(levelAtStep(one.steps, drawn.sensitivity))) continue;
     if (!drawn.checks.has(one.check)) continue;

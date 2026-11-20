@@ -33,6 +33,13 @@
       "options": ["Like 1 in 200 natives", "Like 1 in 50 natives", "Like 1 in 10 natives"]
     },
     {
+      "id": "nativeCheck",
+      "label": "Native check",
+      "description": "Drops a flag when a native voice reading the same sentence gets it too.",
+      "type": "boolean",
+      "default": true
+    },
+    {
       "id": "checkZs",
       "label": "Z said as S",
       "description": "please, these, was: the Z loses its buzz.",

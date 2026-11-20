@@ -11,6 +11,7 @@ import {
   UNDERLINE_SURE,
 } from "../pronounce/drawn";
 import type { Judged, JudgeWord } from "../pronounce/judge";
+import { NATIVE_CHECK } from "../pronounce/native-control";
 import { SENSITIVITY, SENSITIVITY_OPTIONS } from "../pronounce/sensitivity";
 import {
   type FakeDictation,
@@ -436,7 +437,8 @@ test("a prifly without mark levels is given the marks as before, without the new
 
 test("the manifest declares the underline and sensitivity settings the coach reads, a switch per check, all on, the voice box settings, and the version 0.3.0", () => {
   expect(manifest.version).toBe("0.3.0");
-  expect(manifest.settings).toEqual([
+  // The native check's setting is native-control.test.ts's.
+  expect(manifest.settings.filter((one) => one.id !== NATIVE_CHECK)).toEqual([
     {
       id: UNDERLINE,
       label: "Underline",

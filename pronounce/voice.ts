@@ -70,6 +70,8 @@ export type VoiceDeps = {
   pipeline: () => Pipeline | string;
   /** The reader's own reference wav from the settings, when they gave one. */
   referenceFile?: () => Promise<Wav | null>;
+  /** A sentence read by an Edge voice on this machine, at 24 kHz (`edge-tts.ts`): the native check's readings. */
+  native?: (text: string, voice: string) => Promise<Wav>;
   log?: (event: string, fields: Record<string, string | number | boolean | null>) => void;
 };
 
@@ -187,6 +189,24 @@ export class Voice {
       }
       await writeWav(file, made.samples, made.rate);
     });
+  }
+
+  /**
+   * `text` read by the Edge voice `voice` on this machine, at its native 24 kHz: the native
+   * check's reading (`native-control.ts`), kept beside the clips per voice and text.
+   */
+  async native(text: string, voice: string): Promise<Wav> {
+    const read = this.deps.native;
+    if (read === undefined) throw new Error("No native readings here");
+    const file = join(this.deps.dir, `native-${hashOf(voice, text)}.wav`);
+    await this.once(file, async () => {
+      const reading = await read(text, voice);
+      if (reading.rate !== READING_RATE) {
+        throw new Error(`The reading came at ${reading.rate} Hz, not its native ${READING_RATE}`);
+      }
+      await writeWav(file, reading.samples, reading.rate);
+    });
+    return decodeWav(await readFile(file));
   }
 
   /** `file` when it is already made, else made by `make` once however many ask meanwhile. */

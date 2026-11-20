@@ -18,9 +18,11 @@ import { AccentPanel } from "./accent-panel";
 import { SeedVcBox } from "./box";
 import { switchedOn } from "./checks";
 import { Coach } from "./coach";
+import { edgeRead } from "./edge-tts";
 import { FlagCheck, type FlagCheckDeps } from "./flag-check";
 import { ensurePronounce, priflyDataDir } from "./models";
 import { loadNativeStats, type NativeStats } from "./native";
+import { NativeControl, nativeCheckOn } from "./native-control";
 import { RECORDINGS_FOLDER, readPast, recentPieces } from "./past-pieces";
 import { Personal } from "./personal";
 import type { OnMarkAction } from "./play-shim";
@@ -30,6 +32,7 @@ import { startScanWorker } from "./scan-worker";
 import { sensitivityOf } from "./sensitivity";
 import { statusLine } from "./status";
 import { readReference, Voice } from "./voice";
+import type { Wav } from "./wav";
 import { spawnPronounce } from "./worker-pipe";
 
 export type StartDeps = Pick<RunnerDeps, "ensure" | "spawn" | "backoffMs"> & {
@@ -41,6 +44,8 @@ export type StartDeps = Pick<RunnerDeps, "ensure" | "spawn" | "backoffMs"> & {
   now?: () => number;
   /** The reader's past dictation for "Check your flags" (`past-pieces.ts`); left out, there is none. */
   past?: Pick<FlagCheckDeps, "list" | "read">;
+  /** A sentence read by a native voice (`Voice.native`), for the native check; left out, there is no native check. */
+  native?: (text: string, voice: string) => Promise<Wav>;
 };
 
 /** What the extension needs of prifly: the dictation api, 0.16 and later. */
@@ -82,12 +87,13 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
   let natives: NativeStats | null = null;
   const profile = new AccentProfile(api.state, () => natives, deps.now);
   const personal = new Personal(api.state);
+  const control = deps.native === undefined ? null : new NativeControl({ read: deps.native });
   const coach = new Coach(
     api,
     (audio, words) => runner.judge(audio, words),
     deps.voice ?? null,
     profile,
-    { personal },
+    { personal, control },
   );
   const sayRight = () => (String(api.settings?.[VOICE_BOX] ?? "").trim() === "" ? NO_BOX : null);
   const flags = new FlagCheck({
@@ -101,6 +107,7 @@ export function start(api: ExtensionApi, deps: StartDeps): Started {
     natives: () => natives,
     switchedOn: () => switchedOn(api.settings),
     sensitivity: () => sensitivityOf(api.settings),
+    control: () => (nativeCheckOn(api.settings) ? control : null),
     voice: deps.voice ?? null,
     sayRight,
     ...(deps.now === undefined ? {} : { now: deps.now }),
@@ -163,11 +170,13 @@ export function realDeps(api: Pick<ExtensionApi, "log" | "settings">): StartDeps
     pipeline: () => (text(VOICE_BOX) === "" ? NO_BOX : box),
     referenceFile: async () =>
       text(VOICE_REFERENCE) === "" ? null : readReference(text(VOICE_REFERENCE)),
+    native: edgeRead,
     log: (event, fields) => api.log(event, fields),
   });
   const recordings = join(data, RECORDINGS_FOLDER);
   return {
     voice,
+    native: (text, reader) => voice.native(text, reader),
     past: { list: (limit) => recentPieces(recordings, limit), read: readPast },
     ensure: (progress, signal) => ensurePronounce(data, progress, { signal }),
     spawn: (args) =>

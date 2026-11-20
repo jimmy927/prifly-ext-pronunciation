@@ -4,6 +4,7 @@ import { CHECK_IDS, CHECK_LABELS, type CheckId, SWITCHES, switchedOn } from "../
 import { Coach, NOT_A_MISTAKE } from "../pronounce/coach";
 import { UNDERLINE, UNDERLINE_OFF, UNDERLINE_SURE, UNDERLINE_SWITCH } from "../pronounce/drawn";
 import type { Judged } from "../pronounce/judge";
+import { NATIVE_CHECK } from "../pronounce/native-control";
 import { Personal } from "../pronounce/personal";
 import { type FakeDictation, fakeDictation, THREE_AS_TREE, threeTrees } from "./fake-dictation";
 
@@ -40,7 +41,9 @@ const markOf = (check: CheckId, index: number): Judged => ({
 const labels = (fake: FakeDictation) => fake.marks.at(-1)?.marks.map((mark) => mark.label);
 
 test("the manifest's switches are the checks', every one on by default, with the reader's words", () => {
-  const switches = manifest.settings.filter((one) => one.type === "boolean");
+  const switches = manifest.settings.filter(
+    (one) => one.type === "boolean" && one.id !== NATIVE_CHECK,
+  );
   expect(switches.map((one) => [one.id, one.label, one.default])).toEqual(
     CHECK_IDS.map((id) => [SWITCHES[id], CHECK_LABELS[id], true]),
   );

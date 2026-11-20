@@ -37,7 +37,26 @@ step before's "not sure" (`pronounce/sensitivity.ts`; the steps are each
 check's `looser` in `pronounce/data/thresholds.json`, see "What ships now").
 "Check your flags" names the step in use.
 
-Below Sensitivity, one switch per check (see "What it marks"): turn off what
+Native check, below Sensitivity (on by default), drops a flag when a native
+voice reading the same sentence gets it too: you cannot tell by ear whether a
+flag is yours or the model's (or the dictionary's). A piece with a mark to draw
+is read by two Edge voices, en-GB-RyanNeural (Say it right's) and
+en-US-GuyNeural, since the dictionary takes British and American ways of
+saying a word. Only the sentence's text goes to Edge, from this machine
+(`pronounce/edge-tts.ts`; Edge sends only mp3, which `ffmpeg` on the PATH
+decodes at its 24 kHz), and each reading is kept per voice and text in
+`<prifly data>/pronunciation/voice/`. Resampled to 16 kHz, each is judged by
+the same model and checks, its words free to sit anywhere in the clip, and
+compared at the loosest step (1 in 10 natives): a reader's flag goes when
+either reading has a flag of the same check on the same word, for a swapped
+sound with the same expected sound (`pronounce/native-control.ts`). The marks
+wait for the readings (seconds), so a dropped one is never drawn and taken
+away again. When no reading can be made or judged (Edge unreachable, no
+ffmpeg), the marks are kept and each card ends "Not checked against a native
+reading." The log says per piece `ext.pronunciation.control`: the flags
+before, dropped and kept. A word corrected by hand is not compared.
+
+Below it, one switch per check (see "What it marks"): turn off what
 does not work for you. A change to any of these applies at once, to the marks
 already given too, and nothing switches a check off by itself.
 
@@ -193,8 +212,11 @@ them in the background on a worker of its own, two threads, one piece at a
 time, with a progress line and Cancel. Every candidate of every check is
 listed, the ones switched off included, at loose cut-offs: a contrast from
 posterior 0.5, word stress from its `maybe` lead, a vowel past the natives' 5th
-percentile, the other two from their cut-offs. Each row plays your own word
-("Yours"), says it right, and takes a Right or Wrong.
+percentile, the other two from their cut-offs. With the native check on, a
+candidate a native reading of its sentence gets too (scanned the same way) is
+left out, and each check's line counts them ("4 dropped by the native check").
+Each row plays your own word ("Yours"), says it right, and takes a Right or
+Wrong.
 
 Per check the tab shows how often you found it wrong, here and with "Not a
 mistake" in the session ("9 of 14 not a mistake"), and the name of the switch
@@ -373,7 +395,8 @@ memory and 4 cores, so run it deliberately, on a machine with room:
 | `prifly-extension.json`                                                                                     | The manifest, with `"dictation": { "audio": true }`                                                                          |
 | `index.ts`                                                                                                  | `activate`: the extension with its real dependencies; `panel`                                                                |
 | `pronounce/extension.ts`                                                                                    | Puts the runner and the coach together on the api                                                                            |
-| `pronounce/coach.ts`, `drawn.ts`, `checks.ts`                                                               | Dictation handlers, marks, "Not a mistake", the busy rule; which marks the settings draw, the nine checks and their switches |
+| `pronounce/coach.ts`, `latest-queue.ts`, `drawn.ts`, `checks.ts`                                            | Dictation handlers, marks, "Not a mistake", the busy rule; which marks the settings draw, the nine checks and their switches |
+| `pronounce/native-control.ts`, `edge-tts.ts`, `edge-token.ts`                                               | The native check: Edge's native readings of a sentence, and the flags they share dropped                                     |
 | `pronounce/voice.ts`, `box.ts`, `box/runner.py`, `wav.ts`, `play-shim.ts`                                   | Yours and Say it right: the clips, the GPU box, the box's script                                                             |
 | `pronounce/runner.ts`, `status.ts`                                                                          | The worker's life (fetch, start, restart, stop) and the status line                                                          |
 | `pronounce/download.ts`, `models.ts`                                                                        | The sha256-pinned downloader and what it fetches                                                                             |

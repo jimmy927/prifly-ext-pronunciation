@@ -277,7 +277,7 @@ function checkSection(check, view) {
     el(
       "span",
       "tally",
-      `${check.flags.length} flag${check.flags.length === 1 ? "" : "s"} · ${check.marked} marked · ${check.wrong} wrong`,
+      `${check.flags.length} flag${check.flags.length === 1 ? "" : "s"} · ${check.marked} marked · ${check.wrong} wrong${check.dropped > 0 ? ` · ${check.dropped} dropped by the native check` : ""}`,
     ),
   );
   section.append(summary);

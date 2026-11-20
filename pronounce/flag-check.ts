@@ -16,6 +16,7 @@ import { z } from "zod";
 import { CHECK_IDS, CHECK_LABELS, type CheckId } from "./checks";
 import { type Flag, vowelFlags } from "./flags";
 import type { NativeStats } from "./native";
+import { type NativeControl, withNatives } from "./native-control";
 import type { PastPiece } from "./past-pieces";
 import type { Personal, Tally, Verdict } from "./personal";
 import { resample } from "./resample";
@@ -83,6 +84,9 @@ const Stored = z.object({
   total: z.number(),
   complete: z.boolean(),
   flags: z.array(StoredFlag),
+  /** Per check, the flags the native check dropped (`native-control.ts`); sentences it could not check. */
+  dropped: z.partialRecord(z.enum(CHECK_IDS), z.number()).optional(),
+  unchecked: z.number().optional(),
 });
 type Stored = z.infer<typeof Stored>;
 
@@ -121,6 +125,8 @@ export type CheckView = {
   marked: number;
   right: number;
   wrong: number;
+  /** Its flags the native check dropped in the last job: a native reading of the sentence got them too. */
+  dropped: number;
   flags: FlagView[];
 };
 
@@ -157,6 +163,8 @@ export type FlagCheckDeps = {
   switchedOn: () => ReadonlySet<CheckId>;
   /** The Sensitivity step now (`sensitivity.ts`'s `sensitivityOf`); left out, the default. */
   sensitivity?: () => Sensitivity;
+  /** The native check (`native-control.ts`) while its setting is on; null, or left out, when off. */
+  control?: () => Pick<NativeControl, "natives"> | null;
   voice: Pick<Voice, "yours" | "sayRight"> | null;
   /** Why "Say it right" cannot be made now; null when a voice box is set. */
   sayRight: () => string | null;
@@ -180,14 +188,16 @@ function leftWords(seconds: number): string {
 
 const plural = (n: number, one: string) => `${n} ${one}${n === 1 ? "" : "s"}`;
 
+type Stats = NativeStats | null;
+
+/** Every flag of a scanned piece: the worker's and the vowels'. */
+export function flagsOfScan(answer: ScanAnswer, stats: Stats): Flag[] {
+  return [...answer.flags, ...vowelFlags(answer.scores, stats)];
+}
+
 /** The piece's flags as kept: each with its word, its sentence and where its audio is. */
-export function storedFlags(
-  piece: PastPiece,
-  answer: ScanAnswer,
-  stats: NativeStats | null,
-): StoredFlag[] {
-  const all: Flag[] = [...answer.flags, ...vowelFlags(answer.scores, stats)];
-  return all.flatMap((flag): StoredFlag[] => {
+export function storedFlags(piece: PastPiece, flags: readonly Flag[]): StoredFlag[] {
+  return flags.flatMap((flag): StoredFlag[] => {
     const word = piece.words[flag.index];
     if (word === undefined) return [];
     return [
@@ -321,8 +331,31 @@ export class FlagCheck {
       from: Math.max(0, Math.round(word.startMs * SAMPLES_PER_MS)),
       to: Math.max(0, Math.round(word.endMs * SAMPLES_PER_MS)),
     }));
-    const answer = await worker.scan(audio, words);
-    return storedFlags(piece, answer, this.deps.natives());
+    const stats = this.deps.natives();
+    const flags = flagsOfScan(await worker.scan(audio, words), stats);
+    return storedFlags(piece, await this.nativeKept(worker, piece, flags, stats));
+  }
+
+  /**
+   * `flags` without those a native reading of the sentence gets too, scanned the same way
+   * (`native-control.ts`), each check's count of them added to `dropped`; all of them when the
+   * native check is off, and when no reading could be judged (counted in `unchecked`).
+   */
+  private async nativeKept(worker: ScanWorker, piece: PastPiece, flags: Flag[], stats: Stats) {
+    const control = this.deps.control?.() ?? null;
+    if (control === null || flags.length === 0) return flags;
+    const words = piece.words.map((word) => word.text);
+    const answer = await control.natives(piece.text, words, async (audio, asked) =>
+      flagsOfScan(await worker.scan(audio, asked), stats),
+    );
+    const { marks, fields } = withNatives(flags, answer);
+    const dropped = { ...this.stored.dropped };
+    for (const { check } of marks.filter((one) => one.native))
+      dropped[check] = (dropped[check] ?? 0) + 1;
+    const unchecked = (this.stored.unchecked ?? 0) + (answer.error === null ? 0 : 1);
+    this.stored = { ...this.stored, dropped, unchecked };
+    this.deps.log("control", { piece: piece.id, ...fields });
+    return marks.filter((one) => !one.native);
   }
 
   private async each(
@@ -343,8 +376,8 @@ export class FlagCheck {
         if (failed >= MAX_FAILED) throw caught;
         return [];
       });
-      // Cancelled while the piece was scored: it is not counted.
-      if (found === null) break;
+      // Cancelled while the piece, or a native reading of it, was scored: it is not counted.
+      if (found === null || !live()) break;
       // Only failures in a row stop the job.
       if (failed === before) failed = 0;
       this.stored = { ...this.stored, flags: [...this.stored.flags, ...found] };
@@ -423,6 +456,7 @@ export class FlagCheck {
         on: on.has(id),
         line: tallyLine(id, tally, on.has(id)),
         ...tally,
+        dropped: this.stored.dropped?.[id] ?? 0,
         flags: flags.map((one, at) => ({
           id: one.id,
           word: one.word,
@@ -456,7 +490,7 @@ export class FlagCheck {
         `Scores your last ${SCAN_PIECES} English sentences with every check, the ones switched off too. Mark each flag Right or Wrong: each check's tally shows how often it was wrong for you, and which switch in ${WHERE_SWITCHES} turns it off.`,
       listing: () => "Finding your English recordings…",
       running: () => this.runningLine(),
-      done: () => `Scored ${plural(done, "sentence")}: ${flags}`,
+      done: () => `Scored ${plural(done, "sentence")}: ${flags}${this.uncheckedWords()}`,
       cancelled: () =>
         done === 0
           ? "Cancelled before any sentence was scored"
@@ -466,6 +500,13 @@ export class FlagCheck {
         "No English recordings with full audio to score. Turn on Settings, Dictation, Keep recordings of my dictation, dictate in English for a while, then score again.",
     };
     return lines[state]();
+  }
+
+  /** ", 3 sentences not checked against a native reading": those the native check could not judge a reading of. */
+  private uncheckedWords(): string {
+    const unchecked = this.stored.unchecked ?? 0;
+    if (unchecked === 0) return "";
+    return `, ${plural(unchecked, "sentence")} not checked against a native reading`;
   }
 
   /** "Scoring 37 of 200, about 4 minutes left". */

@@ -14,6 +14,12 @@
  * settings' (`drawn.ts`): Sensitivity, Underline and each check's switch. A
  * setting changed redraws the marks already given.
  *
+ * With the native check on (`native-control.ts`), a piece whose settings draw a
+ * mark is not marked until a native reading of its sentence has been judged
+ * too: the marks it shares are kept but not drawn, so none is drawn and then
+ * taken away. A piece that drew nothing keeps its sentence, and is compared
+ * when a setting later draws one of its marks.
+ *
  * Dictation never waits on any of it: a handler keeps what it needs and
  * returns, and the judging runs after, one request at a time. While one
  * runs, the newest that came meanwhile waits and any older one is dropped.
@@ -45,6 +51,8 @@ import {
   UnderlineSwitch,
 } from "./drawn";
 import { inWordOrder, type Judged, type JudgeWord } from "./judge";
+import { LatestQueue } from "./latest-queue";
+import { type NativeControl, withNatives } from "./native-control";
 import { isNotMistake, type NotMistake, StoredNotMistakes, withNotMistake } from "./not-mistakes";
 import type { Personal } from "./personal";
 import {
@@ -107,13 +115,14 @@ type KeptPiece = {
   full?: AudioFull;
 };
 
-/** Optional parts of a coach: where "Not a mistake" counts as a Wrong verdict. */
-export type CoachOptions = { personal?: Pick<Personal, "mark"> | null };
+/** Optional parts of a coach: where "Not a mistake" counts as a Wrong verdict, and the native check (`native-control.ts`). */
+export type CoachOptions = { personal?: Pick<Personal, "mark"> | null; control?: Control | null };
+type Control = Pick<NativeControl, "natives">;
 
-/** The marks given to one piece of a dictation, from `at` when a correction's. */
-type Group = { sessionId: string; dict: string; piece: number; at?: number; shown: Shown[] };
-
-type Task = () => Promise<void>;
+/** The marks given to one piece of a dictation, from `at` when a correction's; `pending`: its sentence and words, until the native check has seen them. */
+type Group = { sessionId: string; dict: string; piece: number; at?: number; shown: Shown[] } & {
+  pending?: { text: string; words: string[] };
+};
 
 /** English as prifly writes it: "en", or a regional "en-GB". */
 export function isEnglish(language: string): boolean {
@@ -142,12 +151,13 @@ export class Coach {
   private readonly voice: Pick<Voice, "yours" | "sayRight"> | null;
   private readonly profile: AccentProfile | null;
   private readonly personal: Pick<Personal, "mark"> | null;
+  private readonly control: Control | null;
+  private readonly controlling = new Set<string>(); // groups in `controlLater`
   private notMistakes: NotMistake[] = [];
   /** Each session's last dictation: its id, and its pieces by number. */
   private readonly kept = new Map<string, { dict: string; pieces: Map<number, KeptPiece> }>();
   private readonly groups = new Map<string, Group>();
-  private waiting: Task | null = null;
-  private draining: Promise<void> | null = null;
+  private readonly queue: LatestQueue;
   private stopped = false;
   /** Whether a kept "Sure mistakes only" counts as "Sure and not sure". */
   private readonly switched: UnderlineSwitch;
@@ -163,9 +173,11 @@ export class Coach {
   ) {
     this.api = api;
     this.judge = judge;
+    this.queue = new LatestQueue((event, fields) => api.log(event, fields));
     this.voice = voice;
     this.profile = profile;
     this.personal = options.personal ?? null;
+    this.control = options.control ?? null;
     this.switched = new UnderlineSwitch(api.state, (event, fields) => api.log(event, fields));
     this.drawn = drawnBy(api.settings, false);
     api.onSettings?.((values) => this.settingsChanged(values));
@@ -183,6 +195,10 @@ export class Coach {
     const before = this.drawn;
     this.drawn = drawnBy(values, this.switched.active);
     for (const group of [...this.groups.values()]) {
+      if (this.needsControl(group)) {
+        this.controlLater(group);
+        continue;
+      }
       const was = pickDrawn(group.shown, before, MAX_MARKS);
       const now = pickDrawn(group.shown, this.drawn, MAX_MARKS);
       const level = (one: Shown, drawn: Drawn) => drawnMark(one, drawn).level;
@@ -217,13 +233,47 @@ export class Coach {
     }));
     const asked = piece.words.map((word) => ({ word: word.text, ...samplesOf(word) }));
     const where = { sessionId: piece.sessionId, dict: piece.dict, piece: piece.piece };
-    this.run(async () => {
+    this.queue.run(async () => {
       const judged = await this.judge(audio, asked);
       if (judged === null) return;
       const marks = inWordOrder([...judged.marks, ...this.vowelMarksOf(judged, spots)]);
-      this.show({ ...where, shown: this.shownOf(marks, spots, full !== undefined) }, false);
+      const shown = this.shownOf(marks, spots, full !== undefined);
+      const pending = { text: piece.text, words: spots.map((spot) => spot.text) };
+      const group: Group = { ...where, shown, ...(this.control === null ? {} : { pending }) };
+      this.show(this.needsControl(group) ? await this.controlled(group) : group, false);
       await this.learn(judged, spots, where);
     });
+  }
+
+  /** Whether `group`'s marks wait for the native check, so none it drops is drawn first: it is on, has not seen them, and the settings draw one. */
+  private needsControl(group: Group): boolean {
+    if (this.control === null || group.pending === undefined || !this.drawn.native) return false;
+    return pickDrawn(group.shown, this.drawn, MAX_MARKS).length > 0;
+  }
+
+  /** `group` compared with native readings of its sentence (`withNatives`), one line logged. */
+  private async controlled(group: Group): Promise<Group> {
+    const { pending, ...rest } = group;
+    if (this.control === null || pending === undefined) return group;
+    const answer = await this.control.natives(pending.text, pending.words, async (audio, words) => {
+      const judged = await this.judge(audio, words);
+      const texts = words.map((word) => ({ text: word.word }));
+      return judged && [...judged.marks, ...this.vowelMarksOf(judged, texts)];
+    });
+    const { marks, fields } = withNatives(group.shown, answer);
+    this.api.log("control", fields);
+    return { ...rest, shown: marks };
+  }
+
+  /** `group`'s native check after a setting drew it, outside the queue; drawn when done unless it changed meanwhile. */
+  private controlLater(group: Group): void {
+    const key = groupKey(group);
+    if (this.controlling.has(key)) return;
+    this.controlling.add(key);
+    const draw = (done: Group) => this.groups.get(key) === group && this.show(done, true);
+    const failed = (caught: unknown) => this.api.log("controlFailed", { error: String(caught) });
+    const done = () => this.controlling.delete(key);
+    void this.controlled(group).then(draw, failed).finally(done);
   }
 
   /** The piece's content words' scores added to the accent profile; a refused write is logged. */
@@ -241,7 +291,7 @@ export class Coach {
   }
 
   /** The Vowels check's marks of a judged piece (`vowels.ts`), from its scores, the natives' and the accent profile. */
-  private vowelMarksOf(judged: Judgement, spots: readonly Spot[]): Judged[] {
+  private vowelMarksOf(judged: Judgement, spots: readonly Pick<Spot, "text">[]): Judged[] {
     if (this.profile === null) return [];
     return steppedVowelMarks(
       judged.scores,
@@ -261,7 +311,7 @@ export class Coach {
     const { sessionId, dict, word, start: at } = correction;
     const asked = [{ word, ...samplesOf(said) }];
     const spots = [{ text: word, start: 0, end: word.length, ...samplesOf(said) }];
-    this.run(async () => {
+    this.queue.run(async () => {
       const judged = await this.judge(piece.audio, asked);
       this.api.log("recheck", { heard: correction.heard, word, marks: judged?.marks.length ?? -1 });
       if (judged === null) return;
@@ -403,14 +453,14 @@ export class Coach {
   /** Nothing more is judged or marked; what is kept goes. */
   stop(): void {
     this.stopped = true;
-    this.waiting = null;
+    this.queue.stop();
     this.kept.clear();
     this.groups.clear();
   }
 
   /** Resolves once every request handed over so far is done: for tests. */
-  async settled(): Promise<void> {
-    while (this.draining !== null) await this.draining;
+  settled(): Promise<void> {
+    return this.queue.settled();
   }
 
   private keep(piece: DictationPiece, audio: Float32Array, full: AudioFull | undefined): void {
@@ -488,30 +538,5 @@ export class Coach {
       if (!(caught instanceof Error)) throw caught;
       this.api.log("markRefused", { error: caught.message });
     }
-  }
-
-  /** `task` now, or after the one running: the newest waits, an older waiting one is dropped. */
-  private run(task: Task): void {
-    if (this.draining !== null) {
-      if (this.waiting !== null) this.api.log("skipped", { reason: "busy" });
-      this.waiting = task;
-      return;
-    }
-    this.draining = this.drain(task);
-  }
-
-  private async drain(first: Task): Promise<void> {
-    let task: Task | null = first;
-    while (task !== null && !this.stopped) {
-      try {
-        await task();
-      } catch (caught) {
-        if (!(caught instanceof Error)) throw caught;
-        this.api.log("judgeFailed", { error: caught.message });
-      }
-      task = this.waiting;
-      this.waiting = null;
-    }
-    this.draining = null;
   }
 }
